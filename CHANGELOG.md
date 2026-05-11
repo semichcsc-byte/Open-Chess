@@ -2,6 +2,36 @@
 
 All user-visible changes to this firmware fork. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [v1.1.1-rp2040] — 2026-05-11
+
+Patch release: add a non-blocking 'bot thinking' animation that survives the WiFiSSL TLS handshake.
+
+🔗 [Release page](https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.1.1-rp2040)
+
+### Added
+
+- **Breathing pulse on rank 8 while the AI is thinking.** A slow blue breathing animation (sine-wave brightness, ~1.5 s period) plays on the bot's back rank from the moment you complete your move until the Stockfish API responds. Lets you see the board is alive instead of just frozen.
+
+### Fixed
+
+- **NeoPixel writes were corrupting the WiFiSSL TLS handshake.** The first attempt at this animation called `clearAllLEDs()` + `showLEDs()` ~20 times per second. Each NeoPixel `show()` disables interrupts for ~2.5 ms (bit-banging the WS2812 protocol), and during the concurrent SSL handshake / read in `WiFiSSLClient`, that was enough to drop TLS records and cause `Failed to connect to Stockfish API` on every move. Fix: animation now only redraws when its discrete brightness bucket actually changes (8 levels over the 1.5 s period → ~5 fps average), and we cleared the strip explicitly between the AI's response and its move display so there's no overlap.
+
+### Verified
+
+```
+Sketch uses 148200 bytes (0%) of program storage space.
+Global variables use 44640 bytes (16%) of dynamic memory.
+=== Self-tests complete: 10/10 passed ===
+```
+
+End-to-end test on Arduino Nano RP2040 Connect, WiFiNINA 3.0.1: e2-e4 → bot thinking pulse plays for ~2 s → Stockfish responds with `bestmove e7e5` → board displays the bot's move correctly.
+
+### Known issue (deferred to v1.2)
+
+The serial debug log still prints chess notation that's mirrored across the rank axis (a move from `e2 to e4` is logged as `from e7 to e5`). Internally the firmware tracks the position correctly and Stockfish receives the right FEN — only the human-readable serial print has a row-axis mirror, the same kind of bug that was fixed for columns in v1.1. Will be fixed by aligning `chess_bot.cpp` and `chess_moves.cpp` print helpers with the standard FEN row convention (`row 0 = rank 8`).
+
+---
+
 ## [v1.1.0-rp2040] — 2026-05-11
 
 UX overhaul + a long-standing **column-mirror coordinate bug** fixed at the driver layer.

@@ -288,11 +288,11 @@ bool ChessBot::connectToWiFi() {
 
 String ChessBot::makeStockfishRequest(String fen) {
     WiFiSSLClient client;
-    
+
     Serial.println("Making API request to Stockfish...");
     Serial.print("FEN: ");
     Serial.println(fen);
-    
+
     if (client.connect(STOCKFISH_API_URL, STOCKFISH_API_PORT)) {
         // URL encode the FEN string
         String encodedFen = urlEncode(fen);
@@ -308,21 +308,28 @@ String ChessBot::makeStockfishRequest(String fen) {
         client.println("Connection: close");
         client.println();
         
-        // Wait for response
+        // Wait for response. Render the breathing 'thinking' indicator
+        // very sparingly (only when the brightness bucket changes -- about
+        // 5 times per second on average). Higher-rate NeoPixel updates
+        // disable interrupts for long enough to corrupt the concurrent
+        // WiFiSSL handshake / read.
         unsigned long startTime = millis();
         while (client.connected() && (millis() - startTime < settings.timeoutMs)) {
             if (client.available()) {
                 String response = client.readString();
                 client.stop();
-                
+                _boardDriver->clearAllLEDs();
+                _boardDriver->showLEDs();
+
                 // Debug: Print raw response
                 Serial.println("=== RAW API RESPONSE ===");
                 Serial.println(response);
                 Serial.println("=== END RAW RESPONSE ===");
-                
+
                 return response;
             }
-            delay(10);
+            showBotThinking();
+            delay(40);
         }
         
         client.stop();
@@ -556,25 +563,27 @@ void ChessBot::executeBotMove(int fromRow, int fromCol, int toRow, int toCol) {
 }
 
 void ChessBot::showBotThinking() {
-    static unsigned long lastUpdate = 0;
-    static int thinkingStep = 0;
-    
-    if (millis() - lastUpdate > 500) {
-        // Animated thinking indicator - pulse the corners
-        _boardDriver->clearAllLEDs();
-        
-        uint8_t brightness = (sin(thinkingStep * 0.3) + 1) * 127;
-        
-        _boardDriver->setSquareLED(0, 0, 0, 0, brightness); // Corner LEDs pulse blue
-        _boardDriver->setSquareLED(0, 7, 0, 0, brightness);
-        _boardDriver->setSquareLED(7, 0, 0, 0, brightness);
-        _boardDriver->setSquareLED(7, 7, 0, 0, brightness);
-        
-        _boardDriver->showLEDs();
-        
-        thinkingStep++;
-        lastUpdate = millis();
+    // Slow 'breathing' on rank 8 (the bot's back rank). Sine-wave brightness
+    // with ~1.5 s period. We only push to the LED strip when the brightness
+    // bucket actually changes (8 discrete steps), so the average frame rate
+    // is ~5 fps -- low enough that the NeoPixel show() (~2.5 ms with
+    // interrupts off) doesn't disrupt the concurrent WiFiSSL TLS handshake
+    // / read in makeStockfishRequest.
+    const float periodMs = 1500.0f;
+    float phase = (millis() % (unsigned long)periodMs) / periodMs;
+    // Sine 0..1 (rectified)
+    float b = (sinf(phase * 2.0f * 3.14159f) + 1.0f) * 0.5f;
+    int bucket = (int)(b * 8.0f);     // 0..7 discrete levels
+    static int lastBucket = -1;
+    if (bucket == lastBucket) return; // skip redundant frames
+    lastBucket = bucket;
+
+    uint8_t bright = 30 + bucket * 25; // 30..205 range, never fully off
+    _boardDriver->clearAllLEDs();
+    for (int c = 0; c < 8; c++) {
+        _boardDriver->setSquareLED(7, c, 0, 0, bright); // pure blue rank 8
     }
+    _boardDriver->showLEDs();
 }
 
 void ChessBot::showConnectionStatus() {
