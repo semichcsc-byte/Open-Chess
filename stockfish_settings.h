@@ -18,7 +18,7 @@ struct StockfishSettings {
     
     static StockfishSettings medium() {
         StockfishSettings s;
-        s.depth = 6;
+        s.depth = 10;
         s.timeoutMs = 25000;
         return s;
     }

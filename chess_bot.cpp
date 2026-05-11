@@ -143,7 +143,7 @@ void ChessBot::update() {
                             
                             // Show possible moves
                             int moveCount = 0;
-                            int moves[27][2];
+                            int moves[MAX_MOVES_PER_PIECE][2];
                             _chessEngine->getPossibleMoves(board, row, col, moveCount, moves);
                             
                             for (int i = 0; i < moveCount; i++) {
@@ -233,7 +233,7 @@ void ChessBot::update() {
                             
                             // Show possible moves again
                             int moveCount = 0;
-                            int moves[27][2];
+                            int moves[MAX_MOVES_PER_PIECE][2];
                             _chessEngine->getPossibleMoves(board, selectedRow, selectedCol, moveCount, moves);
                             
                             for (int i = 0; i < moveCount; i++) {
@@ -335,14 +335,27 @@ String ChessBot::makeStockfishRequest(String fen) {
 }
 
 bool ChessBot::parseStockfishResponse(String response, String &bestMove) {
-    // Find JSON content
-    int jsonStart = response.indexOf("{");
+    // Split HTTP headers from body. The body starts after the first blank line ("\r\n\r\n").
+    // Otherwise indexOf("{") catches the first JSON-shaped header (e.g. Cloudflare's `Nel:`),
+    // which makes the parser fragile every time the upstream provider tweaks its headers.
+    int bodyStart = response.indexOf("\r\n\r\n");
+    if (bodyStart != -1) {
+        bodyStart += 4;
+    } else {
+        // Fallback: some clients return only \n\n separators
+        bodyStart = response.indexOf("\n\n");
+        bodyStart = (bodyStart != -1) ? bodyStart + 2 : 0;
+    }
+    String body = response.substring(bodyStart);
+
+    // Find JSON content inside the body
+    int jsonStart = body.indexOf("{");
     if (jsonStart == -1) {
-        Serial.println("No JSON found in response");
+        Serial.println("No JSON found in response body");
         return false;
     }
     
-    String json = response.substring(jsonStart);
+    String json = body.substring(jsonStart);
     Serial.print("Extracted JSON: ");
     Serial.println(json);
     
@@ -408,7 +421,30 @@ void ChessBot::makeBotMove() {
             if (parseMove(bestMove, fromRow, fromCol, toRow, toCol)) {
                 Serial.print("Bot move: ");
                 Serial.println(bestMove);
-                
+
+                // Sanity-check the API response against the local engine before
+                // mutating the board. Protects against malformed JSON, partially-
+                // received responses, retried requests producing stale moves, or
+                // (rare) the upstream API returning a move for the wrong side.
+                char piece = board[fromRow][fromCol];
+                if (piece == ' ') {
+                    Serial.print("Bot move references empty square ");
+                    Serial.print((char)('a' + fromCol));
+                    Serial.print(8 - fromRow);
+                    Serial.println(" - aborting move, returning to player");
+                    isWhiteTurn = true;
+                    botThinking = false;
+                    return;
+                }
+                if (!_chessEngine->isValidMove(board, fromRow, fromCol, toRow, toCol)) {
+                    Serial.print("Bot move ");
+                    Serial.print(bestMove);
+                    Serial.println(" rejected by local engine - aborting, returning to player");
+                    isWhiteTurn = true;
+                    botThinking = false;
+                    return;
+                }
+
                 executeBotMove(fromRow, fromCol, toRow, toCol);
                 
                 // Switch back to player's turn
@@ -419,14 +455,17 @@ void ChessBot::makeBotMove() {
             } else {
                 Serial.println("Failed to parse bot move");
                 botThinking = false;
+                isWhiteTurn = true;
             }
         } else {
             Serial.println("Failed to parse Stockfish response");
             botThinking = false;
+            isWhiteTurn = true;
         }
     } else {
         Serial.println("No response from Stockfish API");
         botThinking = false;
+        isWhiteTurn = true;
     }
 }
 

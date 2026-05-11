@@ -328,8 +328,17 @@ void initializeSelectedMode(GameMode mode) {
       break;
     case MODE_GAME_3:
       Serial.println("This game mode will be available in a future update!");
-      Serial.println("Returning to game selection in 3 seconds...");
-      delay(3000);
+      Serial.println("Returning to game selection - please remove the piece from the placeholder square.");
+      // Wait for the piece to be lifted off the placeholder square so the
+      // selection loop doesn't immediately re-trigger this branch on every
+      // iteration. Without this guard we get a serial flood (~3 lines/sec)
+      // and the user has no way back to the selection menu without rebooting.
+      while (true) {
+        boardDriver.readSensors();
+        if (!boardDriver.getSensorState(4, 3)) break;
+        delay(100);
+      }
+      delay(500); // small debounce after lift
       currentMode = MODE_SELECTION;
       modeInitialized = false;
       showGameSelection();

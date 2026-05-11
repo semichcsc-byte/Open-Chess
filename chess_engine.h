@@ -1,6 +1,13 @@
 #ifndef CHESS_ENGINE_H
 #define CHESS_ENGINE_H
 
+// Maximum number of moves a single piece can ever generate.
+// 27 = queen on an empty board (8 ranks + 8 files + 11 diagonals
+// minus the source square). Use 28 in arrays to leave a 1-slot guard
+// and keep all callers in sync (was inconsistent: chess_moves used 27,
+// chess_engine used 28).
+#define MAX_MOVES_PER_PIECE 28
+
 // ---------------------------
 // Chess Engine Class
 // ---------------------------

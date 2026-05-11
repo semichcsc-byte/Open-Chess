@@ -53,7 +53,7 @@ void ChessMoves::update() {
                 
                 // Generate possible moves
                 int moveCount = 0;
-                int moves[28][2]; // up to 28 moves (maximum for a queen)
+                int moves[MAX_MOVES_PER_PIECE][2]; // sized via chess_engine.h constant
                 chessEngine->getPossibleMoves(board, row, col, moveCount, moves);
                 
                 // Light up current square and possible move squares

@@ -207,7 +207,7 @@ char ChessEngine::getPieceColor(char piece) {
 // Move validation
 bool ChessEngine::isValidMove(const char board[8][8], int fromRow, int fromCol, int toRow, int toCol) {
     int moveCount = 0;
-    int moves[28][2]; // Maximum possible moves for a queen
+    int moves[MAX_MOVES_PER_PIECE][2]; // sized via chess_engine.h constant
     
     getPossibleMoves(board, fromRow, fromCol, moveCount, moves);
     
