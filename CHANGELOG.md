@@ -1,212 +1,103 @@
 # Changelog
 
-All user-visible changes to this firmware fork. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
+All user-visible changes to the [`semichcsc-byte/Open-Chess`](https://github.com/semichcsc-byte/Open-Chess) Nano RP2040 fix-fork. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [v1.1.2-rp2040] — 2026-05-11
+---
 
-Patch release: don't strand the user with a frozen bot when Stockfish times out.
+## [v1.2.0-rp2040] — 2026-05-11 — **first stable release** ⭐
 
-🔗 [Release page](https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.1.2-rp2040)
+🔗 **[Download (drag-and-drop `.uf2`)](https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.2.0-rp2040)**
 
-### Fixed
+This is the **canonical release** for users with the [Concept-Bytes OpenChess PCB v1](https://concept-bytes.com/products/openchess-pcb) and the Arduino Nano RP2040 Connect (the Kickstarter / official kit). It supersedes the four iteration releases on this same day (v1.0.0-rp2040 through v1.1.2-rp2040) — they remain in the history below as a record but you should grab v1.2.0 instead.
 
-- **Bot stuck after API timeout / parse failure.** When `makeStockfishRequest` returned an empty response (network blip, `stockfish.online` slow, transient TLS failure) or `parseStockfishResponse` / `parseMove` failed, `botThinking` was correctly cleared but `isWhiteTurn` stayed `false`. The next loop iteration of `chess_bot::update()` saw `isWhiteTurn == false && botThinking == false` and just sat idle, frozen, without telling the user. The only escape was the reset gesture (which then required setting up the board from scratch).
+### What this firmware does (vs the abandoned upstream)
 
-  Fix: all three failure paths in `makeBotMove` now reset `isWhiteTurn = true` so the user can retry the move. Added a brief red flash on rank 8 in the API-no-response case so the user knows the bot couldn't respond rather than guessing whether they missed something.
+#### Working AI mode
+- 🌐 **Stockfish AI via WiFi**: connects to your home network, plays at Easy / Medium / Hard / Expert depth via the free [stockfish.online](https://stockfish.online) public API.
+- 🛡️ **Local move validation**: every move the API returns is run through the on-board chess engine before being applied. Malformed responses, partial reads, side-of-turn confusion, etc. all return the turn cleanly to the player.
+- 🟦 **Bot-thinking pulse**: slow blue breathing on the bot's back rank while Stockfish is computing, so the board never looks frozen.
+- 🟥 **API failure feedback**: if the bot can't reach Stockfish (timeout, network blip, TLS failure), rank 8 flashes red 3 times and the turn returns to the player so the move can be retried.
+- 🔌 **Resilient WiFi setup**: clean AP→STA tear-down before `WiFi.begin()` (the upstream silently hangs on this; see [PR #9](https://github.com/Concept-Bytes/Open-Chess/pull/9)).
+
+#### Full chess rules
+- ✅ Check, checkmate, stalemate detection with on-board animations
+- ✅ Castling (kingside + queenside, FIDE-legal — king-not-in-check, king-doesn't-pass-through-attacked, rights tracked properly)
+- ✅ En passant with pink LED hint and correct captured-pawn removal
+- ✅ Pinned-piece detection (legal-move filter prevents exposing own king)
+- ✅ 50-move rule + insufficient material draw (K-vs-K, K + minor vs K)
+- ✅ Promotion choice: 4 LEDs on the player's back rank let you pick Q / R / B / N (Human-vs-Human mode)
+
+#### UX
+- 💡 **Setup hint at boot**: 16 LEDs glow soft white on the white side, 16 glow red on the black side. As you place each piece, the LED for that square goes dark.
+- 🌈 **Convergent rainbow explosion** when all 32 pieces are in place (4 collapsing rainbow rings → 4 diagonal beams from corners → white shockwave outward → triple pulse on the 2 selectors). ~3.5 s of spectacle.
+- 🎯 **Simplified 2-option menu**: D5 lights for Human-vs-Human, E4 for AI mode.
+- 📌 **Sticky menu**: lifting a piece to use as a selector no longer regresses to the setup hint.
+- 🔄 **Reset gesture**: while playing, putting all 32 pieces back to starting squares for ≥1.5 s drops back to the menu (re-runs the explosion). Lets you finish a game and start a different mode without power-cycling.
+- 🆔 **Versioned boot banner** prints firmware version + fork name on serial.
+
+#### Robustness
+- ✅ **10 self-tests** at every boot: pseudo-legal moves, legal-move filtering (own-check), Fool's Mate detection, pinned-piece, castling rights, castling-in-check forbidden, en-passant, K-vs-K draw, `applyMove` correctness for castling. Failures flash red 5×.
+- ✅ **Sensor debounce** (3 consecutive identical reads required to flip state) — eliminates the piece-flicker upstream had on slide.
+- ✅ **AP shutdown** when not needed (saves ~100 mA, removes the orphan `OpenChessBoard` WiFi network).
+- ✅ **MODE_GAME_3 placeholder fix**: no longer spams serial at ~3 lines/sec when a piece sits on the placeholder square.
+- ✅ **Driver-layer column-mirror fix**: the Concept-Bytes PCB wires file `a` to internal column 7. The original firmware never accounted for this, so all chess notation in serial logs / FEN strings was mirrored across the a-h axis. Fixed in `BoardDriver` (1 line in `readSensors`, 1 line in `getPixelIndex`); all 36 callers untouched.
+
+### Bug fixes vs upstream Concept-Bytes (each was a real PR upstream)
+
+| # | Bug | PR | Fix |
+|---|---|---|---|
+| 1 | AI mode hangs at "Connecting to WiFi…" | [#9](https://github.com/Concept-Bytes/Open-Chess/pull/9) | AP→STA tear-down before `WiFi.begin()` |
+| 2 | "API request was not successful" on success | [#10](https://github.com/Concept-Bytes/Open-Chess/pull/10) | Parser splits HTTP body from headers |
+| 3 | Easy and Medium AI are identical depth | [#10](https://github.com/Concept-Bytes/Open-Chess/pull/10) | `medium()` now sends depth=10 |
+| 4 | Bot move applied without local validation | [#10](https://github.com/Concept-Bytes/Open-Chess/pull/10) | Engine validates before mutating board |
+| 5 | MODE_GAME_3 placeholder spams serial | [#10](https://github.com/Concept-Bytes/Open-Chess/pull/10) | Wait for piece-lift before re-arming |
+| 6 | `moves[27]` vs `moves[28]` inconsistency | [#10](https://github.com/Concept-Bytes/Open-Chess/pull/10) | Centralised `MAX_MOVES_PER_PIECE` |
+| 7 | No chess rules (check, mate, castling, EP, draws) | [#11](https://github.com/Concept-Bytes/Open-Chess/pull/11) | Full FIDE engine |
+| 8 | Bot freezes silently on API timeout | this fork only | All failure paths reset `isWhiteTurn = true` + red flash |
+| 9 | Column-mirror coordinate bug | this fork only (PCB-specific calibration finding) | Mirror `col` in `BoardDriver` |
 
 ### Verified
 
 ```
-Sketch uses 148398 bytes (0%) of program storage space.
-Global variables use 44640 bytes (16%) of dynamic memory.
+Sketch uses ~150 KB (0% of 16 MB program flash).
+Global variables use ~44 KB (16% of 270 KB RAM).
 === Self-tests complete: 10/10 passed ===
 ```
 
-Tested by killing my router mid-move; the board flashed red on rank 8 and gave the turn back so the move could be retried after the network recovered.
+End-to-end on Arduino Nano RP2040 Connect with WiFiNINA firmware 3.0.1:
+- 10 moves of an Italian Game (with capture, invalid-move recovery, breathing pulse during bot-thinking) all worked
+- Reset gesture validated mid-game
+- Network kill mid-move triggers red-flash and returns turn to player
 
-### Known issue (still deferred to v1.2)
+### Hardware tested
 
-Row-axis mirror in serial debug print — see v1.1.1 notes.
+- **Concept-Bytes PCB v1** (the one shipped to Kickstarter backers)
+- **Arduino Nano RP2040 Connect**
+- **WiFiNINA firmware 3.0.1**
+- **arduino-cli 1.4.1**, `arduino:mbed_nano` core 4.5.0
+- **Adafruit NeoPixel** library v1.14.0 (pinned)
 
----
+### Known limitations (deferred to v1.3+)
 
-## [v1.1.1-rp2040] — 2026-05-11
+- **Serial debug print has a row-axis mirror**: a move from `e2 to e4` is logged as `from e7 to e5`. Internally the firmware tracks the position correctly and Stockfish receives the right FEN — only the human-readable serial print has a row-axis mirror, the same kind of bug that was fixed for columns. Easy fix in `chess_bot.cpp::processPlayerMove` and `chess_moves.cpp` print helpers.
+- **AI mode promotion**: pawn always auto-promotes to queen (5-char API parse for `e7e8q` not implemented yet).
+- **Difficulty selection** still requires a recompile; no runtime selector.
+- **3-fold repetition** not implemented (would need ~2 KB RAM for position history).
 
-Patch release: add a non-blocking 'bot thinking' animation that survives the WiFiSSL TLS handshake.
-
-🔗 [Release page](https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.1.1-rp2040)
-
-### Added
-
-- **Breathing pulse on rank 8 while the AI is thinking.** A slow blue breathing animation (sine-wave brightness, ~1.5 s period) plays on the bot's back rank from the moment you complete your move until the Stockfish API responds. Lets you see the board is alive instead of just frozen.
-
-### Fixed
-
-- **NeoPixel writes were corrupting the WiFiSSL TLS handshake.** The first attempt at this animation called `clearAllLEDs()` + `showLEDs()` ~20 times per second. Each NeoPixel `show()` disables interrupts for ~2.5 ms (bit-banging the WS2812 protocol), and during the concurrent SSL handshake / read in `WiFiSSLClient`, that was enough to drop TLS records and cause `Failed to connect to Stockfish API` on every move. Fix: animation now only redraws when its discrete brightness bucket actually changes (8 levels over the 1.5 s period → ~5 fps average), and we cleared the strip explicitly between the AI's response and its move display so there's no overlap.
-
-### Verified
-
-```
-Sketch uses 148200 bytes (0%) of program storage space.
-Global variables use 44640 bytes (16%) of dynamic memory.
-=== Self-tests complete: 10/10 passed ===
-```
-
-End-to-end test on Arduino Nano RP2040 Connect, WiFiNINA 3.0.1: e2-e4 → bot thinking pulse plays for ~2 s → Stockfish responds with `bestmove e7e5` → board displays the bot's move correctly.
-
-### Known issue (deferred to v1.2)
-
-The serial debug log still prints chess notation that's mirrored across the rank axis (a move from `e2 to e4` is logged as `from e7 to e5`). Internally the firmware tracks the position correctly and Stockfish receives the right FEN — only the human-readable serial print has a row-axis mirror, the same kind of bug that was fixed for columns in v1.1. Will be fixed by aligning `chess_bot.cpp` and `chess_moves.cpp` print helpers with the standard FEN row convention (`row 0 = rank 8`).
+For a planned-vs-won't-fix breakdown including Web UI / OTA / Lichess, see [`docs/COMPARISON.md`](docs/COMPARISON.md).
 
 ---
 
-## [v1.1.0-rp2040] — 2026-05-11
+## Detailed iteration history (intra-day, 2026-05-11)
 
-UX overhaul + a long-standing **column-mirror coordinate bug** fixed at the driver layer.
+These four releases were the iteration steps that built up to v1.2.0. They're kept here as a historical record and remain downloadable from the [releases page](https://github.com/semichcsc-byte/Open-Chess/releases) but **users should install v1.2.0** above.
 
-🔗 [Release page with `.uf2` / `.bin` / `.hex` binaries](https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.1.0-rp2040)
+| Tag | Theme |
+|---|---|
+| [v1.0.0-rp2040](https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.0.0-rp2040) | First tagged build: PRs #9, #10, #11 combined |
+| [v1.1.0-rp2040](https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.1.0-rp2040) | Column-mirror coordinate fix + UX overhaul (setup hint, rainbow explosion, 2-option menu, sticky menu, reset gesture) |
+| [v1.1.1-rp2040](https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.1.1-rp2040) | Bot-thinking breathing pulse on rank 8 (and the SSL-handshake corruption fix that the first attempt at this animation introduced) |
+| [v1.1.2-rp2040](https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.1.2-rp2040) | Bot survives Stockfish API timeout (was freezing silently) |
+| **v1.2.0-rp2040** | **Consolidated stable release** ⭐ |
 
-### Fixed
-
-- **🐛 COORDINATE BUG: columns were mirrored at the hardware layer.** The Concept-Bytes PCB wires the sensor matrix and LED strip such that physical file `a` lands on internal column 7, file `h` on column 0. The original firmware never accounted for this, so every move printed to serial had its file letter mirrored (`a` ↔ `h`, `b` ↔ `g`, etc.). The board worked internally because everything stayed consistent within the firmware, but:
-    - Serial debug logs were misleading (`Player moved P from a7 to a5` actually meant `h7-h5`)
-    - The Stockfish FEN/move strings were technically wrong (the engine got mirrored positions, but since the position was internally self-consistent, the suggested moves were valid for what the engine saw — just labelled with the wrong file letters)
-    - Any future Web UI or PGN export would show the wrong notation
-  
-  Verified by an interactive 4-corner calibration test (place piece on h1 → reads `(0, 0)` instead of `(0, 7)`, etc.). Fixed at the driver layer in [`board_driver.cpp`](board_driver.cpp): both `readSensors()` and `getPixelIndex()` now flip `col` to `7 - col` so the engine sees standard chess coordinates with `col 0 = file a`. **All 36 callers (engine, chess_moves, chess_bot, animations) untouched** — the fix is fully encapsulated in `BoardDriver`.
-
-  Affects every previous release including v1.0.0-rp2040 and the upstream Concept-Bytes firmware. **Anyone reading their serial monitor previously was reading mirrored notation.**
-
-### Added
-
-- **Setup hint at boot**: as soon as the board powers on, the 16 squares of the white starting position glow soft white and the 16 black squares glow red. Place each piece in its starting square and the corresponding LED goes dark. No more guessing where the pieces go.
-- **Convergent rainbow explosion** when all 32 pieces are in place: 4 collapsing rainbow rings (red → orange → yellow → green) sweep from the outer edge to the centre, followed by 4 diagonal beams from the corners (magenta / cyan / amber / lime), then a white shockwave bursts back outwards, ending with a triple pulse on the 2 selector squares. ~3.5 seconds of spectacle.
-- **Simplified 2-option mode menu**: D5 lights up for Human-vs-Human, E4 for AI mode (Sensor Test still available in code but removed from the menu — it was confusing to land on by accident).
-- **Sticky menu**: once the explosion plays and the menu appears, lifting a piece to use as a selector no longer regresses to the setup hint. Menu stays visible until you actually pick a mode.
-- **Reset gesture**: while playing in any chess mode, if you put all 32 pieces back onto their starting squares and hold them there for 1.5 seconds, the firmware drops back to the menu (re-runs the explosion + selector). Lets you finish a game and start a different mode without power-cycling. Will not trigger at game start because the gesture requires the board to have *deviated* from the starting position at least once during the current mode.
-- **Boot banner** prints firmware version + fork name on serial.
-
-### Verified
-
-```
-Sketch uses 149724 bytes (0%) of program storage space.
-Global variables use 44648 bytes (16%) of dynamic memory.
-=== Self-tests complete: 10/10 passed ===
-```
-
-Tested on Arduino Nano RP2040 Connect with WiFiNINA firmware 3.0.1, Concept-Bytes PCB v1, arduino-cli 1.4.1, arduino:mbed_nano core 4.5.0.
-
-### Migration notes
-
-- **Coordinates change for the user only in the serial monitor.** The on-board LEDs and gameplay are visually identical except now labelled correctly. If you've been reading move logs, the file letters are now correct (a-file on the left when looking from white's side, h-file on the right).
-- No `arduino_secrets.h` change required.
-- Re-flashing v1.1 over v1.0 is safe; no state migration needed.
-
----
-
-## [v1.0.0-rp2040] — 2026-05-11
-
-First tagged release of the [`semichcsc-byte/Open-Chess`](https://github.com/semichcsc-byte/Open-Chess) Nano RP2040 fix-fork.
-
-🔗 [Release page with `.uf2` / `.bin` / `.hex` binaries](https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.0.0-rp2040)
-
-### Added
-
-- **Full chess rules engine** ([PR #11](https://github.com/Concept-Bytes/Open-Chess/pull/11)):
-  - Check, checkmate, stalemate detection with on-board animations
-  - Castling (kingside + queenside, FIDE-legal — king-not-in-check, doesn't-pass-through-attacked, rights tracked in `GameState`)
-  - En passant (pink LED hint on capture target, captured pawn removed from real square)
-  - 50-move rule (halfmove clock, reset on pawn move or capture)
-  - Insufficient material draw (K vs K, K + minor vs K)
-  - Promotion choice: 4 LEDs on player's back rank let you pick Q/R/B/N (Human-vs-Human only)
-  - Pinned-piece detection (legal-move filter prevents exposing own king)
-- **Sensor debounce**: 3 consecutive identical reads required before flipping public state. Tunable via `SENSOR_DEBOUNCE_SCANS` in `board_driver.h`. Eliminates the piece-flicker that the original firmware showed when sliding pieces.
-- **AP shutdown**: `WiFi.end()` is called when entering Chess Moves or Sensor Test. Saves ~100 mA and removes the orphan `OpenChessBoard` AP from your network list. Bot mode still tears down + reopens internally per [PR #9](https://github.com/Concept-Bytes/Open-Chess/pull/9).
-- **On-boot self-tests** (`ChessEngine::runSelfTests()`): 10 deterministic chess engine tests run before WiFi setup, with PASS/FAIL printed to serial and a red-flash failure indicator. Catches engine regressions before they reach a game.
-- **Versioned boot banner**: serial monitor now prints `Firmware: v1.0.0-rp2040` and the fork name on every boot.
-- **`GameState` struct**: castling rights, en-passant target, halfmove clock, last move tracking — centralised so they can never be forgotten.
-- **`ChessEngine::applyMove()`**: single entrypoint for board mutation. Handles regular moves, captures, castling (moves the rook too), en-passant (removes the captured pawn from its actual square), and updates all `GameState` fields. All callers (`chess_moves.cpp`, `chess_bot.cpp`) now go through this.
-
-### Fixed
-
-- **AI mode hang at "Connecting to WiFi…"** ([PR #9](https://github.com/Concept-Bytes/Open-Chess/pull/9)): WiFiNINA on the Nano RP2040 cannot run AP and STA simultaneously. The original firmware called `WiFi.begin()` without shutting down the AP first, causing it to silently never reach `WL_CONNECTED`. Fix: explicit `WiFi.disconnect()` + `WiFi.end()` + `delay(2000)` before `WiFi.begin()`. Closes [issue #5](https://github.com/Concept-Bytes/Open-Chess/issues/5).
-- **Stockfish parser broken on Cloudflare-fronted responses** ([PR #10](https://github.com/Concept-Bytes/Open-Chess/pull/10)): the API response includes JSON-shaped headers (`Nel:`, `Report-To:`) before the body. The original parser did `indexOf("{")` on the full HTTP response and grabbed the wrong object. Fix: split body from headers on `\r\n\r\n` first.
-- **Easy and Medium AI were identical** ([PR #10](https://github.com/Concept-Bytes/Open-Chess/pull/10)): `StockfishSettings::medium()` returned `depth=6` despite the serial banner saying `Medium (Depth 10)`. Fixed: `depth=10` to match.
-- **Bot move applied without local validation** ([PR #10](https://github.com/Concept-Bytes/Open-Chess/pull/10)): if the API returned a malformed or stale move (rare but possible on Cloudflare hiccups), the board state would silently corrupt. Fix: every API response is now run through `ChessEngine::isLegalMove()` before being applied. Rejected moves return the turn to the player.
-- **MODE_GAME_3 spam loop** ([PR #10](https://github.com/Concept-Bytes/Open-Chess/pull/10)): selecting the placeholder "Coming Soon" mode caused an infinite serial spam (`Returning to game selection in 3 seconds...` every 3 s) while the piece sat on the selector square. Fix: wait for the sensor to clear before re-arming the selection menu.
-- **Inconsistent move array sizes** ([PR #10](https://github.com/Concept-Bytes/Open-Chess/pull/10)): `chess_moves.cpp` used `int moves[28][2]` but `chess_bot.cpp` used `int moves[27][2]` — off-by-one buffer overflow risk for queens with 27 candidate moves. Fix: centralised as `#define MAX_MOVES_PER_PIECE 28` in `chess_engine.h`, used everywhere.
-- **`arduino_secrets.h` was tracked in git history** with a placeholder SSID (`Kc iphone`) inherited from upstream. Removed from tracking; `.gitignore` already prevents new commits.
-
-### Changed
-
-- All board mutation in `chess_moves.cpp` and `chess_bot.cpp` now goes through `ChessEngine::applyMove()` instead of touching the `board[][]` array directly. Prevents castling-rook-not-moved and en-passant-pawn-not-removed bugs.
-- `chess_bot.cpp::executeBotMove()` now also calls `ChessEngine::getGameResult()` after the bot's move to detect end-of-game; previously the AI mode would happily play forever past checkmate.
-- `chess_moves.cpp::update()` rewrites the move-detection state machine to enforce turn order (white starts, alternates) and uses `getLegalMoves` (not `getPossibleMoves`) so pinned pieces can't move.
-- README replaced with fork-specific content (was the original Concept-Bytes upstream README).
-- Self-tests run **before** WiFi setup so engine regressions surface even if WiFi can't initialise.
-
-### Verified
-
-```
-Sketch uses 150799 bytes (0%) of program storage space.
-Global variables use 44640 bytes (16%) of dynamic memory.
-=== Self-tests complete: 10/10 passed ===
-```
-
-Tested on Arduino Nano RP2040 Connect with WiFiNINA firmware 3.0.1, Concept-Bytes PCB v1, arduino-cli 1.4.1, arduino:mbed_nano core 4.5.0.
-
-### Known limitations
-
-- **Promotion choice in bot mode**: still auto-promotes to queen. The Stockfish API string includes a 5th promotion char (`e7e8q`) but the existing `parseMove` only takes the first 4. Small follow-up.
-- **3-fold repetition**: not implemented (would need ~2 KB RAM for position history).
-- **OTA / Web UI / Lichess**: not possible on this hardware (WiFiNINA / RP2040 limitations). For these, see [`joojoooo/OpenChess`](https://github.com/joojoooo/OpenChess) (ESP32-based).
-
----
-
-## [Unreleased]
-
-### Planned for v1.1.0-rp2040 (no ETA)
-
-Small, high-impact items, all RP2040-friendly:
-
-- 5-char API move parsing for bot promotion choice (`e7e8q`)
-- Difficulty selection at runtime via 4 selector squares (no recompile)
-- Brightness control via Arduino EEPROM emulation
-- Async LED animations (state-machine refactor)
-- 3-fold repetition (if RAM allows)
-
-### Planned for v1.2.0-rp2040 — Web UI
-
-Medium-effort, very high value: removes the recompile-for-WiFi pain point and adds in-browser monitoring.
-
-- LittleFS-served HTML/CSS/JS via the existing AP/HTTP server in `wifi_manager.cpp`
-- Configure WiFi without editing `arduino_secrets.h` + recompiling
-- Mode selection from browser
-- Live board state + FEN export
-- Difficulty selection
-- Resign / Draw buttons
-- Move history (in-RAM)
-
-Will not match [`joojoooo`](https://github.com/joojoooo/OpenChess)'s depth (no themes, no move sounds, no evaluation graphs) — just enough to remove the recompile pain point.
-
-### Speculative for v1.3.0-rp2040 — Lichess (only if there's demand)
-
-- Online Lichess play via NDJSON streaming over HTTPS long-poll (Lichess Bot API)
-- Realistic but fragile on WiFiNINA: heap fragmentation over long games, TLS handshake latency on Cloudflare reconnect (~3-5 s gap), token storage
-- Honest estimate: 3-4 sessions of work + tuning
-- **Most users wanting Lichess on a physical board are better served by [`joojoooo/OpenChess`](https://github.com/joojoooo/OpenChess) on an ESP32**, so this is low-priority unless someone files a feature request
-
-### Won't fix (architectural limits of the RP2040)
-
-- **OTA firmware updates** — RP2040 has no dual flash partition (A/B), no `Update.h`. The upstream mbed core attempted a `second_stage_ota` patch and reverted it. A custom bootloader is theoretically possible but has weeks of development cost and a real risk of bricking user boards. The `.uf2` drag-and-drop workflow is the moral equivalent (5 seconds of user time).
-- **Web Flasher** — no WebUSB driver path for the RP2040. `.uf2` drag-and-drop replaces it.
-- **Lichess WebSocket** transport — not used by Lichess Bot API anyway (NDJSON over HTTPS instead).
-
-If you need any of the above, **use [`joojoooo/OpenChess`](https://github.com/joojoooo/OpenChess) on an ESP32**. It's the right tool for that job.
-
-See [README roadmap](README.md#-roadmap) and [docs/COMPARISON.md](docs/COMPARISON.md) for the latest.
-
-[v1.0.0-rp2040]: https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.0.0-rp2040
-[v1.1.0-rp2040]: https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.1.0-rp2040
-[v1.1.1-rp2040]: https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.1.1-rp2040
-[v1.1.2-rp2040]: https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.1.2-rp2040
+[v1.2.0-rp2040]: https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.2.0-rp2040
