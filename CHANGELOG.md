@@ -2,6 +2,50 @@
 
 All user-visible changes to this firmware fork. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [v1.1.0-rp2040] — 2026-05-11
+
+UX overhaul + a long-standing **column-mirror coordinate bug** fixed at the driver layer.
+
+🔗 [Release page with `.uf2` / `.bin` / `.hex` binaries](https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.1.0-rp2040)
+
+### Fixed
+
+- **🐛 COORDINATE BUG: columns were mirrored at the hardware layer.** The Concept-Bytes PCB wires the sensor matrix and LED strip such that physical file `a` lands on internal column 7, file `h` on column 0. The original firmware never accounted for this, so every move printed to serial had its file letter mirrored (`a` ↔ `h`, `b` ↔ `g`, etc.). The board worked internally because everything stayed consistent within the firmware, but:
+    - Serial debug logs were misleading (`Player moved P from a7 to a5` actually meant `h7-h5`)
+    - The Stockfish FEN/move strings were technically wrong (the engine got mirrored positions, but since the position was internally self-consistent, the suggested moves were valid for what the engine saw — just labelled with the wrong file letters)
+    - Any future Web UI or PGN export would show the wrong notation
+  
+  Verified by an interactive 4-corner calibration test (place piece on h1 → reads `(0, 0)` instead of `(0, 7)`, etc.). Fixed at the driver layer in [`board_driver.cpp`](board_driver.cpp): both `readSensors()` and `getPixelIndex()` now flip `col` to `7 - col` so the engine sees standard chess coordinates with `col 0 = file a`. **All 36 callers (engine, chess_moves, chess_bot, animations) untouched** — the fix is fully encapsulated in `BoardDriver`.
+
+  Affects every previous release including v1.0.0-rp2040 and the upstream Concept-Bytes firmware. **Anyone reading their serial monitor previously was reading mirrored notation.**
+
+### Added
+
+- **Setup hint at boot**: as soon as the board powers on, the 16 squares of the white starting position glow soft white and the 16 black squares glow red. Place each piece in its starting square and the corresponding LED goes dark. No more guessing where the pieces go.
+- **Convergent rainbow explosion** when all 32 pieces are in place: 4 collapsing rainbow rings (red → orange → yellow → green) sweep from the outer edge to the centre, followed by 4 diagonal beams from the corners (magenta / cyan / amber / lime), then a white shockwave bursts back outwards, ending with a triple pulse on the 2 selector squares. ~3.5 seconds of spectacle.
+- **Simplified 2-option mode menu**: D5 lights up for Human-vs-Human, E4 for AI mode (Sensor Test still available in code but removed from the menu — it was confusing to land on by accident).
+- **Sticky menu**: once the explosion plays and the menu appears, lifting a piece to use as a selector no longer regresses to the setup hint. Menu stays visible until you actually pick a mode.
+- **Reset gesture**: while playing in any chess mode, if you put all 32 pieces back onto their starting squares and hold them there for 1.5 seconds, the firmware drops back to the menu (re-runs the explosion + selector). Lets you finish a game and start a different mode without power-cycling. Will not trigger at game start because the gesture requires the board to have *deviated* from the starting position at least once during the current mode.
+- **Boot banner** prints firmware version + fork name on serial.
+
+### Verified
+
+```
+Sketch uses 149724 bytes (0%) of program storage space.
+Global variables use 44648 bytes (16%) of dynamic memory.
+=== Self-tests complete: 10/10 passed ===
+```
+
+Tested on Arduino Nano RP2040 Connect with WiFiNINA firmware 3.0.1, Concept-Bytes PCB v1, arduino-cli 1.4.1, arduino:mbed_nano core 4.5.0.
+
+### Migration notes
+
+- **Coordinates change for the user only in the serial monitor.** The on-board LEDs and gameplay are visually identical except now labelled correctly. If you've been reading move logs, the file letters are now correct (a-file on the left when looking from white's side, h-file on the right).
+- No `arduino_secrets.h` change required.
+- Re-flashing v1.1 over v1.0 is safe; no state migration needed.
+
+---
+
 ## [v1.0.0-rp2040] — 2026-05-11
 
 First tagged release of the [`semichcsc-byte/Open-Chess`](https://github.com/semichcsc-byte/Open-Chess) Nano RP2040 fix-fork.
@@ -105,3 +149,4 @@ If you need any of the above, **use [`joojoooo/OpenChess`](https://github.com/jo
 See [README roadmap](README.md#-roadmap) and [docs/COMPARISON.md](docs/COMPARISON.md) for the latest.
 
 [v1.0.0-rp2040]: https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.0.0-rp2040
+[v1.1.0-rp2040]: https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.1.0-rp2040

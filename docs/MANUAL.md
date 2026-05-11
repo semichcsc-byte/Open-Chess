@@ -240,57 +240,138 @@ To exit: power-cycle the board (no menu return from this mode).
 
 ## WiFi & AI mode setup
 
-The pre-built `.uf2` does **not** include WiFi credentials — we can't ship binaries with someone else's password baked in.
+The pre-built `.uf2` does **not** include WiFi credentials — we can't ship binaries with someone else's password baked in. To use AI mode you need to compile the firmware once with your home WiFi configured. Once that's done, the credentials are stored in flash and survive power cycles. **You only need to do this once** unless you change WiFi network or move house.
 
-### One-time setup
+### Prerequisites
 
-1. **Clone the firmware fork:**
+- A 2.4 GHz WiFi network with internet access. **WiFiNINA cannot connect to 5 GHz networks** — most modern routers broadcast both bands, but if yours is 5 GHz only, you need to enable 2.4 GHz in the router admin.
+- The WiFi password (case sensitive). Special characters work but **must not contain** unescaped backslashes (`\`) or unbalanced quotes (`"`). Most ordinary passwords are fine.
+- A USB-C cable to flash.
+- The Arduino CLI installed (`brew install arduino-cli` on macOS, or [arduino-cli releases](https://arduino.github.io/arduino-cli/latest/installation/) elsewhere).
 
-   ```sh
-   git clone https://github.com/semichcsc-byte/Open-Chess.git
-   cd Open-Chess
-   git checkout v1.0.0-rp2040
-   ```
+### Quick setup (5 minutes, one time)
 
-2. **Copy the secrets template:**
+#### 1. Clone the firmware fork
 
-   ```sh
-   cp arduino_secrets_template.h arduino_secrets.h
-   ```
+```sh
+git clone https://github.com/semichcsc-byte/Open-Chess.git
+cd Open-Chess
+git checkout v1.1.0-rp2040    # or whatever the latest tag is
+```
 
-3. **Edit `arduino_secrets.h`:**
+#### 2. Create your secrets file
 
-   ```c
-   #define SECRET_SSID "YourWiFiName"
-   #define SECRET_PASS "YourWiFiPassword"
+```sh
+cp arduino_secrets_template.h arduino_secrets.h
+```
 
-   // Stockfish API — these defaults work, no change needed
-   #define STOCKFISH_API_URL  "stockfish.online"
-   #define STOCKFISH_API_PATH "/api/s/v2.php"
-   #define STOCKFISH_API_PORT 443  // HTTPS
-   ```
+#### 3. Edit `arduino_secrets.h`
 
-4. **Install dependencies (one-time):**
+Open the file in any text editor and fill in the WiFi network you want the bot to connect to:
 
-   ```sh
-   arduino-cli core install arduino:mbed_nano
-   arduino-cli lib install "Adafruit NeoPixel"@1.14.0
-   arduino-cli lib install WiFiNINA
-   ```
+```c
+#ifndef ARDUINO_SECRETS_H
+#define ARDUINO_SECRETS_H
 
-5. **Compile and upload:**
+// WiFi Network Credentials
+#define SECRET_SSID "YourWiFiName"          // case sensitive
+#define SECRET_PASS "YourWiFiPassword"      // case sensitive
 
-   ```sh
-   # Find the port:
-   arduino-cli board list
-   # Then (replace usbmodemXXX with yours):
-   arduino-cli compile --fqbn arduino:mbed_nano:nanorp2040connect .
-   arduino-cli upload --fqbn arduino:mbed_nano:nanorp2040connect -p /dev/cu.usbmodemXXX .
-   ```
+// Stockfish API — these defaults work, leave them alone unless
+// stockfish.online ever moves to a new endpoint.
+#define STOCKFISH_API_URL  "stockfish.online"
+#define STOCKFISH_API_PATH "/api/s/v2.php"
+#define STOCKFISH_API_PORT 443  // HTTPS
 
-The firmware now has your WiFi baked in and AI mode will work.
+#endif
+```
 
-> **`arduino_secrets.h` is `.gitignore`d** in this repo — you can safely commit other firmware changes without leaking your WiFi password.
+> ⚠️ **Common mistakes that will silently fail with `WL_CONNECT_FAILED`:**
+> - **Wrong band**: WiFiNINA can't see 5 GHz networks. If your phone connects to `MyWiFi` but the board doesn't, check your router has a 2.4 GHz SSID enabled (often the same name with `_2.4G` suffix on dual-band setups).
+> - **Hidden SSID**: WiFiNINA can connect to hidden SSIDs but it's flaky. If possible, make the network broadcast its name.
+> - **Captive portal / open network**: Hotel and airport WiFi that requires a browser login won't work — there's no browser on the board.
+> - **WPA Enterprise (802.1X)**: not supported. Home WPA2 / WPA3 PSK is fine.
+> - **Phone hotspot**: works, but your phone needs to stay on the same network the whole time you play.
+
+#### 4. Install dependencies (one-time)
+
+```sh
+arduino-cli core install arduino:mbed_nano
+arduino-cli lib install "Adafruit NeoPixel"@1.14.0
+arduino-cli lib install WiFiNINA
+```
+
+#### 5. Find your board's USB port
+
+Plug in the Arduino, then:
+
+```sh
+arduino-cli board list
+```
+
+You'll see something like:
+
+```
+Port                            Protocol Type              Board Name
+/dev/cu.usbmodem201301          serial   Serial Port (USB) Arduino Nano RP2040 Connect
+```
+
+The path you want is `/dev/cu.usbmodemXXXXXXX` (macOS), `/dev/ttyACM0` (Linux), or `COMx` (Windows).
+
+#### 6. Compile and upload
+
+```sh
+arduino-cli compile --fqbn arduino:mbed_nano:nanorp2040connect .
+arduino-cli upload --fqbn arduino:mbed_nano:nanorp2040connect -p /dev/cu.usbmodem201301 .
+```
+
+(Replace `usbmodem201301` with whatever your `board list` showed.)
+
+After the upload finishes the board reboots automatically with the new firmware. Open the Serial Monitor at 9600 baud and you should see, after a few seconds:
+
+```
+=== Starting Chess Bot Mode ===
+Tearing down AP mode before connecting as station...
+Attempting to connect to SSID: YourWiFiName
+Connection attempt 1/10 - Status: 3
+Connected to WiFi!
+IP address: 192.168.x.y
+WiFi connected! Bot mode ready.
+```
+
+`Status: 3` = `WL_CONNECTED` ✅. From this point on the AI mode works.
+
+### What if it fails?
+
+The connection log will end with `Failed to connect to WiFi` and the board flashes red 5 times. Match the symptom against this table:
+
+| Serial output | Most likely cause | Fix |
+|---|---|---|
+| `Connection attempt N/10 - Status: 4` repeating, never gets past 4 | Wrong password (`WL_CONNECT_FAILED`) | Re-check `SECRET_PASS` for typos, case, missing characters at the end. **Special chars `\` and `"` need escaping** (e.g. `"P\\\\ass\\"word"` for `P\ass"word`) |
+| `Status: 6` repeating | SSID not found (`WL_DISCONNECTED`) | The board can't see your network. Likely on 5 GHz only, or out of range. Move the Arduino closer to the router; turn on 2.4 GHz |
+| `Status: 1` | `WL_NO_SSID_AVAIL` | Same as above |
+| Connects then loses connection mid-game | Weak signal, or router does aggressive client kicking | Move closer; on TP-Link / ASUS routers, disable "Smart Connect" / band-steering; whitelist the board's MAC address |
+| `WiFi module not found!` | The Arduino can't talk to the WiFiNINA chip | Reset the board (white button), re-flash. If it persists, the U-blox NINA-W102 module on the Arduino has likely come loose — try Arduino's [WiFiNINA firmware updater](https://docs.arduino.cc/tutorials/communication/wifi-nina-examples) |
+| Connects but `Failed to connect to Stockfish API` | Internet blocked or DNS issue | From your laptop on the same WiFi, run `curl https://stockfish.online/api/s/v2.php?fen=rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR%20w%20KQkq%20-%200%201&depth=6` — if that fails too, your network is blocking the API |
+
+### Changing WiFi later
+
+If you move house or the router password changes, just repeat steps 3 + 6. No need to re-clone or re-install dependencies.
+
+### Connecting to a phone hotspot
+
+Useful when you want to play AI mode somewhere without home WiFi.
+
+1. On your phone, enable Personal Hotspot.
+2. Note the SSID + password (often shown on the hotspot screen).
+3. Edit `arduino_secrets.h` with those credentials and re-flash.
+4. **Keep the phone awake and on the same network** during play. Some phones throttle the hotspot when the screen is off — disable battery optimisation for the hotspot if so.
+
+### Security note
+
+The compiled `.uf2` / `.bin` artifact contains your WiFi password as plaintext (the firmware can't connect otherwise). **Do not share these binaries**. The release `.uf2` on GitHub is built without credentials and is safe to share — it's the one you should hand to friends.
+
+The `.gitignore` in this repo excludes `arduino_secrets.h` so you can commit other firmware changes without leaking your password.
 
 ### How the bot reaches Stockfish
 

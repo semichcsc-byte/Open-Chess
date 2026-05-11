@@ -72,7 +72,12 @@ void BoardDriver::readSensors() {
         delayMicroseconds(100);
         for (int col = 0; col < NUM_COLS; col++) {
             int sensorVal = digitalRead(colPins[col]);
-            sensorState[row][col] = (sensorVal == LOW);
+            // Calibration on this PCB found that physical file 'a' is wired
+            // to the rightmost shift-register column and file 'h' to the
+            // leftmost. Flip the column index so the logical (row, col)
+            // exposed to the engine matches standard chess notation:
+            //   col 0 = file a, col 7 = file h.
+            sensorState[row][7 - col] = (sensorVal == LOW);
         }
     }
     loadShiftRegister(0x00);
@@ -95,7 +100,12 @@ void BoardDriver::updateSensorPrev() {
 }
 
 int BoardDriver::getPixelIndex(int row, int col) {
-    return col * NUM_COLS + (7 - row);
+    // Mirror the col flip applied in readSensors() so LEDs and sensors
+    // share the same logical coordinate system. Without this, lighting
+    // (row 0, col 0) [which the engine treats as a1] would land on the
+    // physical h1 square because the LED strip is wired the same way as
+    // the sensor matrix.
+    return (7 - col) * NUM_COLS + (7 - row);
 }
 
 void BoardDriver::clearAllLEDs() {
@@ -274,13 +284,27 @@ bool BoardDriver::checkInitialBoard(const char initialBoard[8][8]) {
 }
 
 void BoardDriver::updateSetupDisplay(const char initialBoard[8][8]) {
+    // Show squares that still NEED a piece. White-side squares (uppercase
+    // pieces, rows 0-1) glow white; black-side squares (rows 6-7) glow red.
+    // As the user places each piece the matching square goes dark, so the
+    // remaining lit squares form a clear "place piece here" map.
+    // When all pieces are in place the board goes fully dark, then the
+    // game-start animation kicks in.
     for (int row = 0; row < 8; row++) {
         for (int col = 0; col < 8; col++) {
             int pixelIndex = getPixelIndex(row, col);
-            if (initialBoard[row][col] != ' ' && sensorState[row][col]) {
-                strip.setPixelColor(pixelIndex, strip.Color(0, 0, 0, 255));
-            } else {
+            char piece = initialBoard[row][col];
+            if (piece == ' ' || sensorState[row][col]) {
+                // Empty starting square OR piece already placed -> off
                 strip.setPixelColor(pixelIndex, 0);
+            } else {
+                // Piece missing on this square -> show hint
+                bool isWhitePiece = (piece >= 'A' && piece <= 'Z');
+                if (isWhitePiece) {
+                    strip.setPixelColor(pixelIndex, strip.Color(0, 0, 0, 200)); // white channel
+                } else {
+                    strip.setPixelColor(pixelIndex, strip.Color(180, 0, 0));    // red
+                }
             }
         }
     }
