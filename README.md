@@ -28,7 +28,9 @@ A bug-fix fork of [Concept-Bytes/Open-Chess](https://github.com/Concept-Bytes/Op
 - [Where the hardware comes from](#-where-the-hardware-comes-from)
 - [Comparison with other forks](#-comparison-with-other-forks)
 - [Upstream PRs](#-upstream-prs)
-- [Contributing](#-contributing)
+- [Contributing](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
+- [User manual](docs/MANUAL.md) — game modes, troubleshooting, WiFi setup
 - [License](#license)
 
 ---
@@ -52,7 +54,7 @@ A bug-fix fork of [Concept-Bytes/Open-Chess](https://github.com/Concept-Bytes/Op
    === Self-tests complete: 10/10 passed ===
    ```
 
-6. Four white LEDs light up in the centre of the board — place a piece on one to pick a mode. Full manual: **[docs/MANUAL.md](https://github.com/semichcsc-byte/openchess/blob/main/docs/MANUAL.md)** in the build doc repo.
+6. Four white LEDs light up in the centre of the board — place a piece on one to pick a mode. Full manual: **[docs/MANUAL.md](docs/MANUAL.md)**.
 
 > ⚠️ **AI mode requires WiFi credentials.** The pre-built `.uf2` does **not** include them. To use AI mode, [compile from source](#-compile-from-source-only-needed-for-ai-mode). Human-vs-Human and Sensor Test work out of the box.
 
@@ -167,7 +169,7 @@ arduino-cli upload --fqbn arduino:mbed_nano:nanorp2040connect -p /dev/cu.usbmode
 | **Magnets** | 10×2 mm neodymium (32 pieces, south pole down for A3144 sensors) |
 | **Steel discs** | 10×1 mm (64, one under each square) |
 
-Full BOM with prices and Amazon links: [openchess/docs/BOM.md](https://github.com/semichcsc-byte/openchess/blob/main/docs/BOM.md).
+Full BOM with prices and Amazon links: [openchess/docs/BOM.md](https://github.com/semichcsc-byte/openchess/blob/main/docs/BOM.md) (build documentation repo).
 
 ---
 
@@ -186,7 +188,7 @@ Full BOM with prices and Amazon links: [openchess/docs/BOM.md](https://github.co
 
 > If you have an ESP32 and don't mind re-soldering with jumper wires, **[joojoooo/OpenChess](https://github.com/joojoooo/OpenChess) is the more powerful firmware**. This fork exists because the Concept-Bytes Kickstarter campaign shipped the **Nano RP2040 Connect** — the official firmware for that exact MCU has been broken and unmaintained since Aug 2025, leaving backers without working AI mode.
 
-→ Honest feature matrix: [openchess/docs/COMPARISON.md](https://github.com/semichcsc-byte/openchess/blob/main/docs/COMPARISON.md).
+→ Honest feature matrix: **[docs/COMPARISON.md](docs/COMPARISON.md)**.
 
 ---
 
@@ -204,12 +206,7 @@ If you want the patches in a single branch, use [`feat/rp2040-rules-and-ux`](htt
 
 ## 🤝 Contributing
 
-Bug reports and PRs welcome. Please include:
-
-- Hardware: PCB version, MCU, magnet size
-- Firmware version (printed on serial banner)
-- Full serial output at 9600 baud, from boot to the failure
-- A photo if relevant
+See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports and PRs welcome — please include hardware details, firmware version (printed on serial banner), and full serial output at 9600 baud from boot to the failure.
 
 For build documentation issues (BOM, photos, instructions), open at [`semichcsc-byte/openchess`](https://github.com/semichcsc-byte/openchess/issues) instead.
 

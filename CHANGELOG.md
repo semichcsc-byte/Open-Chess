@@ -1,0 +1,76 @@
+# Changelog
+
+All user-visible changes to this firmware fork. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
+
+## [v1.0.0-rp2040] — 2026-05-11
+
+First tagged release of the [`semichcsc-byte/Open-Chess`](https://github.com/semichcsc-byte/Open-Chess) Nano RP2040 fix-fork.
+
+🔗 [Release page with `.uf2` / `.bin` / `.hex` binaries](https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.0.0-rp2040)
+
+### Added
+
+- **Full chess rules engine** ([PR #11](https://github.com/Concept-Bytes/Open-Chess/pull/11)):
+  - Check, checkmate, stalemate detection with on-board animations
+  - Castling (kingside + queenside, FIDE-legal — king-not-in-check, doesn't-pass-through-attacked, rights tracked in `GameState`)
+  - En passant (pink LED hint on capture target, captured pawn removed from real square)
+  - 50-move rule (halfmove clock, reset on pawn move or capture)
+  - Insufficient material draw (K vs K, K + minor vs K)
+  - Promotion choice: 4 LEDs on player's back rank let you pick Q/R/B/N (Human-vs-Human only)
+  - Pinned-piece detection (legal-move filter prevents exposing own king)
+- **Sensor debounce**: 3 consecutive identical reads required before flipping public state. Tunable via `SENSOR_DEBOUNCE_SCANS` in `board_driver.h`. Eliminates the piece-flicker that the original firmware showed when sliding pieces.
+- **AP shutdown**: `WiFi.end()` is called when entering Chess Moves or Sensor Test. Saves ~100 mA and removes the orphan `OpenChessBoard` AP from your network list. Bot mode still tears down + reopens internally per [PR #9](https://github.com/Concept-Bytes/Open-Chess/pull/9).
+- **On-boot self-tests** (`ChessEngine::runSelfTests()`): 10 deterministic chess engine tests run before WiFi setup, with PASS/FAIL printed to serial and a red-flash failure indicator. Catches engine regressions before they reach a game.
+- **Versioned boot banner**: serial monitor now prints `Firmware: v1.0.0-rp2040` and the fork name on every boot.
+- **`GameState` struct**: castling rights, en-passant target, halfmove clock, last move tracking — centralised so they can never be forgotten.
+- **`ChessEngine::applyMove()`**: single entrypoint for board mutation. Handles regular moves, captures, castling (moves the rook too), en-passant (removes the captured pawn from its actual square), and updates all `GameState` fields. All callers (`chess_moves.cpp`, `chess_bot.cpp`) now go through this.
+
+### Fixed
+
+- **AI mode hang at "Connecting to WiFi…"** ([PR #9](https://github.com/Concept-Bytes/Open-Chess/pull/9)): WiFiNINA on the Nano RP2040 cannot run AP and STA simultaneously. The original firmware called `WiFi.begin()` without shutting down the AP first, causing it to silently never reach `WL_CONNECTED`. Fix: explicit `WiFi.disconnect()` + `WiFi.end()` + `delay(2000)` before `WiFi.begin()`. Closes [issue #5](https://github.com/Concept-Bytes/Open-Chess/issues/5).
+- **Stockfish parser broken on Cloudflare-fronted responses** ([PR #10](https://github.com/Concept-Bytes/Open-Chess/pull/10)): the API response includes JSON-shaped headers (`Nel:`, `Report-To:`) before the body. The original parser did `indexOf("{")` on the full HTTP response and grabbed the wrong object. Fix: split body from headers on `\r\n\r\n` first.
+- **Easy and Medium AI were identical** ([PR #10](https://github.com/Concept-Bytes/Open-Chess/pull/10)): `StockfishSettings::medium()` returned `depth=6` despite the serial banner saying `Medium (Depth 10)`. Fixed: `depth=10` to match.
+- **Bot move applied without local validation** ([PR #10](https://github.com/Concept-Bytes/Open-Chess/pull/10)): if the API returned a malformed or stale move (rare but possible on Cloudflare hiccups), the board state would silently corrupt. Fix: every API response is now run through `ChessEngine::isLegalMove()` before being applied. Rejected moves return the turn to the player.
+- **MODE_GAME_3 spam loop** ([PR #10](https://github.com/Concept-Bytes/Open-Chess/pull/10)): selecting the placeholder "Coming Soon" mode caused an infinite serial spam (`Returning to game selection in 3 seconds...` every 3 s) while the piece sat on the selector square. Fix: wait for the sensor to clear before re-arming the selection menu.
+- **Inconsistent move array sizes** ([PR #10](https://github.com/Concept-Bytes/Open-Chess/pull/10)): `chess_moves.cpp` used `int moves[28][2]` but `chess_bot.cpp` used `int moves[27][2]` — off-by-one buffer overflow risk for queens with 27 candidate moves. Fix: centralised as `#define MAX_MOVES_PER_PIECE 28` in `chess_engine.h`, used everywhere.
+- **`arduino_secrets.h` was tracked in git history** with a placeholder SSID (`Kc iphone`) inherited from upstream. Removed from tracking; `.gitignore` already prevents new commits.
+
+### Changed
+
+- All board mutation in `chess_moves.cpp` and `chess_bot.cpp` now goes through `ChessEngine::applyMove()` instead of touching the `board[][]` array directly. Prevents castling-rook-not-moved and en-passant-pawn-not-removed bugs.
+- `chess_bot.cpp::executeBotMove()` now also calls `ChessEngine::getGameResult()` after the bot's move to detect end-of-game; previously the AI mode would happily play forever past checkmate.
+- `chess_moves.cpp::update()` rewrites the move-detection state machine to enforce turn order (white starts, alternates) and uses `getLegalMoves` (not `getPossibleMoves`) so pinned pieces can't move.
+- README replaced with fork-specific content (was the original Concept-Bytes upstream README).
+- Self-tests run **before** WiFi setup so engine regressions surface even if WiFi can't initialise.
+
+### Verified
+
+```
+Sketch uses 150799 bytes (0%) of program storage space.
+Global variables use 44640 bytes (16%) of dynamic memory.
+=== Self-tests complete: 10/10 passed ===
+```
+
+Tested on Arduino Nano RP2040 Connect with WiFiNINA firmware 3.0.1, Concept-Bytes PCB v1, arduino-cli 1.4.1, arduino:mbed_nano core 4.5.0.
+
+### Known limitations
+
+- **Promotion choice in bot mode**: still auto-promotes to queen. The Stockfish API string includes a 5th promotion char (`e7e8q`) but the existing `parseMove` only takes the first 4. Small follow-up.
+- **3-fold repetition**: not implemented (would need ~2 KB RAM for position history).
+- **OTA / Web UI / Lichess**: not possible on this hardware (WiFiNINA / RP2040 limitations). For these, see [`joojoooo/OpenChess`](https://github.com/joojoooo/OpenChess) (ESP32-based).
+
+---
+
+## [Unreleased]
+
+Planned for v1.1.0-rp2040 (no ETA):
+
+- 5-char API move parsing for bot promotion choice
+- Difficulty selection at runtime via 4 selector squares
+- Brightness control via Arduino EEPROM emulation
+- Async LED animations (state-machine refactor)
+- 3-fold repetition (if RAM allows)
+
+See [README roadmap](README.md#-roadmap) for the latest.
+
+[v1.0.0-rp2040]: https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.0.0-rp2040
