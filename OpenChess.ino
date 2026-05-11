@@ -4,6 +4,15 @@
 #include "sensor_test.h"
 #include "chess_bot.h"
 
+// ---------------------------
+// Firmware version
+// ---------------------------
+// Bumped by the semichcsc-byte/Open-Chess RP2040 fix-fork. Kept separate
+// from any upstream Concept-Bytes versioning. Format: vMAJOR.MINOR.PATCH
+// for the fork, with -rp2040 suffix to make it obvious this is the
+// patched build that targets the Arduino Nano RP2040 Connect.
+#define OPENCHESS_FW_VERSION "1.0.0-rp2040"
+
 // Uncomment the next line to enable WiFi features (requires compatible board)
 #define ENABLE_WIFI  // Currently disabled - RP2040 boards use local mode only
 #ifdef ENABLE_WIFI
@@ -71,6 +80,9 @@ void setup() {
   Serial.println();
   Serial.println("================================================");
   Serial.println("         OpenChess Starting Up");
+  Serial.print  ("         Firmware: v");
+  Serial.println(OPENCHESS_FW_VERSION);
+  Serial.println("         Fork:    semichcsc-byte/Open-Chess");
   Serial.println("================================================");
   Serial.println("DEBUG: Serial communication established");
   Serial.print("DEBUG: Millis since boot: ");
