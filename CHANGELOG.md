@@ -4,6 +4,37 @@ All user-visible changes to the [`semichcsc-byte/Open-Chess`](https://github.com
 
 ---
 
+## [v1.2.1-rp2040] — 2026-05-11
+
+Patch release: castling is now visually obvious in Human-vs-Human mode.
+
+🔗 [Release page](https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.2.1-rp2040)
+
+### Added
+
+- **Castling visual hint** in `chess_moves` (Human-vs-Human mode): when you complete a king-side or queen-side castle by moving the king two squares, the board immediately:
+  1. Flashes the rook's source square in **blinking blue** 4 times (so you know which rook to lift).
+  2. Lights the rook's destination square in **solid blue** (so you know where to put it).
+  3. Holds both lit for an extra 2 seconds so a slow user catches the hint.
+
+  Previously the firmware silently expected you to know the FIDE rules and just "move the rook too" — which is the kind of muscle memory regular tournament players have but most casual players don't. Now the board explicitly tells you what's needed.
+
+  Serial log also prints `Castling: move the rook from h1 to f1` (or appropriate squares) so you can confirm.
+
+### Known limitation
+
+AI mode (`chess_bot.cpp`) does not yet use the same engine `applyMove` path, so the castling visual hint is **Human-vs-Human only** for now. Will be ported to AI mode in v1.3 when `chess_bot.cpp` is refactored to use `ChessEngine::applyMove` (which will also fix the row-axis serial print mirror in one go).
+
+### Verified
+
+```
+Sketch uses 148801 bytes (0%) of program storage space.
+Global variables use 44640 bytes (16%) of dynamic memory.
+=== Self-tests complete: 10/10 passed ===
+```
+
+---
+
 ## [v1.2.0-rp2040] — 2026-05-11 — **first stable release** ⭐
 
 🔗 **[Download (drag-and-drop `.uf2`)](https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.2.0-rp2040)**
@@ -101,3 +132,4 @@ These four releases were the iteration steps that built up to v1.2.0. They're ke
 | **v1.2.0-rp2040** | **Consolidated stable release** ⭐ |
 
 [v1.2.0-rp2040]: https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.2.0-rp2040
+[v1.2.1-rp2040]: https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.2.1-rp2040
