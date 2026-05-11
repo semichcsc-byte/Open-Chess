@@ -58,22 +58,22 @@ Status as of **May 2026**. ✅ = implemented and working, ⚠️ = partial or wi
 |---|---|---|---|
 | WiFi AP for mode selection | ✅ but conflicts with STA | ✅ + clean teardown before STA | ✅ as captive portal fallback |
 | AP→STA transition | ❌ silently hangs (issue #5) | ✅ explicit `WiFi.disconnect()` + `WiFi.end()` | ✅ |
-| WiFi credentials baked in code | ⚠️ `arduino_secrets.h` (manual edit + reflash) | ⚠️ same | ✅ Web UI input, 3 saved networks, fast reconnect |
+| WiFi credentials baked in code | ⚠️ `arduino_secrets.h` (manual edit + reflash) | ⚠️ same today; ⏳ planned for v1.2 (Web UI) | ✅ Web UI input, 3 saved networks, fast reconnect |
 | HTTP body parser robust to header JSON | ❌ grabs first `{` (Cloudflare `Nel:` header) | ✅ splits on `\r\n\r\n` | n/a (uses different lib) |
 | Stockfish API integration | ⚠️ broken (parser bug) | ✅ working | ✅ working |
-| Lichess online play | ❌ | ❌ (WiFiNINA WebSocket reliability) | ✅ play live games on physical board |
+| Lichess online play | ❌ | ⏳ possible via NDJSON streaming, but fragile on WiFiNINA — not on near-term roadmap | ✅ play live games on physical board |
 | Chess.com integration | ❌ | ❌ | ⚠️ planned |
 
 ### Software infrastructure
 
 | Feature | Concept-Bytes | semichcsc-byte | joojoooo |
 |---|---|---|---|
-| OTA firmware updates | ❌ | ❌ (RP2040 lacks dual flash partition) | ✅ via Web UI drag&drop |
-| Auto-update from GitHub releases | ❌ | ❌ | ✅ checks at boot |
-| Web UI for config / state / move history | ❌ | ❌ (WiFiNINA can't serve LittleFS) | ✅ full-featured |
-| Customisable themes (piece, square, sound) | ❌ | ❌ | ✅ |
-| Web Flasher (browser-based) | ❌ | ❌ | ✅ flash from Chrome via WebUSB |
-| GitHub Actions CI/CD | ❌ | ❌ | ✅ tagged builds + release artifacts |
+| OTA firmware updates | ❌ | ❌ **won't fix** — RP2040 has no dual flash partition + no `Update.h`; the upstream mbed core tried (`second_stage_ota` patch) and reverted. Use `.uf2` drag-and-drop instead. | ✅ via Web UI drag&drop |
+| Auto-update from GitHub releases | ❌ | ❌ (depends on OTA) | ✅ checks at boot |
+| Web UI for config / state / move history | ❌ | ⏳ **planned for v1.2.0-rp2040** — LittleFS is available on the mbed core, existing AP/HTTP server can be extended | ✅ full-featured |
+| Customisable themes (piece, square, sound) | ❌ | ❌ (not planned) | ✅ |
+| Web Flasher (browser-based) | ❌ | ❌ (no WebUSB on RP2040; `.uf2` drag-and-drop is the moral equivalent) | ✅ flash from Chrome via WebUSB |
+| GitHub Actions CI/CD | ❌ | ❌ (trivial to add, not done yet) | ✅ tagged builds + release artifacts |
 | Self-tests | ❌ | ✅ 10 tests at boot | ❌ |
 | Tagged releases with `.uf2`/`.bin`/`.hex` | ❌ | ✅ v1.0.0-rp2040 | ✅ v1.0.6 (latest) |
 
@@ -101,23 +101,24 @@ These are deliberate design choices, not oversights — joojoooo trades simplici
 
 ---
 
-## What joojoooo has that we don't
+## What joojoooo has that we don't (yet)
 
-A lot. If you have an ESP32, **just use joojoooo** — no point reinventing things that already work better there:
+A lot. If you have an ESP32, **just use joojoooo** — no point reinventing things that already work better there. For the Nano RP2040, here's what's realistic vs not:
 
-- **Lichess online play** — the killer feature. Play actual rated Lichess games on a physical board.
-- **Web UI** — entire game state, move history, evaluation graph, board edit, theme customisation, all in your browser.
-- **OTA updates** — never plug in USB again after first install.
-- **Auto-calibration** — automatically figures out your pin order, LED layout, board orientation. Huge for custom builds.
-- **Async architecture** — server doesn't freeze when you're moving pieces, animations look smoother.
-- **3-fold repetition rule** — true draw detection.
-- **Resign / Draw buttons** in the WebUI, plus "lift both kings for 2 seconds" gesture.
-- **Game-history recovery** — power loss mid-game doesn't lose your position.
-- **CI/CD** — every tag triggers an automated build, the Web Flasher always serves the latest.
+**joojoooo has, we plan to add (v1.2+):**
+- **Web UI** — LittleFS is available on the mbed core, the existing AP/HTTP server in `wifi_manager.cpp` can be extended. We'll match the **configuration** features (WiFi, mode, difficulty, FEN export, draw/resign) but not the depth (themes, sounds, evaluation graphs).
 
-These features are mostly **ESP32-specific** (LittleFS for web assets, dual-core for async, dual flash partition for OTA, more reliable WiFi stack for WebSockets). They cannot be straightforwardly back-ported to the WiFiNINA-based Nano RP2040 Connect.
+**joojoooo has, we won't realistically match:**
+- **Lichess online play** — technically possible (see Roadmap), but the right hardware for online play is ESP32. We'd be reinventing the wheel with a less reliable WiFi stack.
+- **OTA updates** — ESP32 has dual flash partitions and `Update.h` built-in. RP2040 doesn't, and emulating it is weeks of bootloader work for marginal gain over `.uf2` drag-and-drop.
+- **Async architecture** — RP2040 has 2 cores but the WiFiNINA stack is single-thread. We can do `millis()`-based async LED animations (planned v1.1) but not a full async web server.
+- **3-fold repetition** — possible if RAM allows (planned v1.1).
+- **Resign / Draw buttons** — will come with the v1.2 Web UI.
+- **Game-history recovery on power loss** — needs LittleFS + state serialiser, comes naturally with Web UI work.
+- **Auto-calibration of GPIOs / LED layout** — high complexity, low value for the Concept-Bytes PCB (pinout is fixed). Not planned.
+- **CI/CD with auto-builds** — trivial GitHub Actions setup, will add when the version cadence justifies it.
 
----
+The deliberate non-goals are clearly marked **[Won't fix](#wont-fix-rp2040-architectural-limits)** in the Roadmap section.
 
 ## Why have two forks at all?
 
@@ -137,17 +138,37 @@ Both forks treat each other's existence as legitimate. There's no fork war here.
 
 In priority order, all RP2040-friendly:
 
-1. **5-char API move parsing** so AI mode supports promotion choice (`e7e8q`).
-2. **Difficulty selection at runtime** — pick Easy/Medium/Hard/Expert from the 4 selector squares after picking AI mode (instead of having to recompile).
-3. **Brightness control** — read a value from a non-volatile area (Arduino EEPROM emulation on RP2040), use it in `BoardDriver::begin()`.
-4. **Async LED animations** — refactor `fireworkAnimation`, `captureAnimation`, `promotionAnimation` to a `millis()`-based state machine.
-5. **3-fold repetition** if RAM allows (~2 KB for last 100 positions).
+**v1.1.0-rp2040** (small, high-impact, ≤1 session each):
 
-Out of scope (require ESP32):
+1. **5-char API move parsing** so AI mode supports promotion choice (`e7e8q`)
+2. **Difficulty selection at runtime** — pick Easy/Medium/Hard/Expert from the 4 selector squares after AI mode (no recompile)
+3. **Brightness control** — read non-volatile value (Arduino EEPROM emulation on RP2040)
+4. **Async LED animations** — refactor `firework`/`capture`/`promotion` to a `millis()`-based state machine
+5. **3-fold repetition** if RAM allows (~2 KB for last 100 positions)
 
-- OTA updates
-- Web UI
-- Lichess
+**v1.2.0-rp2040** (medium-effort, very high value):
+
+6. **Web UI** — the LittleFS partition is available on the mbed core and the existing `wifi_manager.cpp` AP/HTTP server can be extended. Realistic deliverables:
+    - Configure WiFi without editing `arduino_secrets.h` + recompiling
+    - Mode selection from browser
+    - Live board state + FEN export
+    - Difficulty selection
+    - Resign / Draw buttons
+    - Move history (in-RAM, lost on reboot)
+
+   Won't match joojoooo's depth (no themes, no move sounds, no evaluation graphs) — just enough to remove the recompile-for-WiFi pain point.
+
+**v1.3.0-rp2040** (speculative, only if there's user demand):
+
+7. **Lichess** integration via NDJSON streaming. Possible: Lichess Bot API uses HTTPS long-poll, not WebSocket, which WiFiNINA tolerates. Hard parts: heap fragmentation over long games, TLS handshake latency on Cloudflare reconnect (~3-5 s gap), token storage. Honest estimate: 3–4 sessions of work + tuning. **Most users wanting Lichess on a physical board are better off with [`joojoooo/OpenChess`](https://github.com/joojoooo/OpenChess) on an ESP32**, so this is low-priority unless someone files a feature request.
+
+### Won't fix (RP2040 architectural limits)
+
+- **OTA firmware updates** — the RP2040 has no dual flash partition (A/B), no `Update.h` library, and the upstream mbed core attempted a `second_stage_ota` patch and reverted it. A custom bootloader is theoretically possible but has weeks of development cost and a real risk of bricking user boards. The `.uf2` drag-and-drop workflow we already have is fine: double-tap reset → drop file → done in 5 seconds.
+- **Web Flasher** — no WebUSB driver path exists for the RP2040. The `.uf2` workflow is the moral equivalent.
+- **Lichess WebSocket** transport — not used by Lichess Bot API anyway (they use NDJSON over HTTPS).
+
+If you need any of the above, **use [`joojoooo/OpenChess`](https://github.com/joojoooo/OpenChess) on an ESP32**. It's the right project for that hardware and that feature set.
 
 ### `joojoooo/OpenChess` — what's coming
 

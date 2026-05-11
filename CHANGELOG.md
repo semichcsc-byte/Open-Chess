@@ -63,14 +63,45 @@ Tested on Arduino Nano RP2040 Connect with WiFiNINA firmware 3.0.1, Concept-Byte
 
 ## [Unreleased]
 
-Planned for v1.1.0-rp2040 (no ETA):
+### Planned for v1.1.0-rp2040 (no ETA)
 
-- 5-char API move parsing for bot promotion choice
-- Difficulty selection at runtime via 4 selector squares
+Small, high-impact items, all RP2040-friendly:
+
+- 5-char API move parsing for bot promotion choice (`e7e8q`)
+- Difficulty selection at runtime via 4 selector squares (no recompile)
 - Brightness control via Arduino EEPROM emulation
 - Async LED animations (state-machine refactor)
 - 3-fold repetition (if RAM allows)
 
-See [README roadmap](README.md#-roadmap) for the latest.
+### Planned for v1.2.0-rp2040 — Web UI
+
+Medium-effort, very high value: removes the recompile-for-WiFi pain point and adds in-browser monitoring.
+
+- LittleFS-served HTML/CSS/JS via the existing AP/HTTP server in `wifi_manager.cpp`
+- Configure WiFi without editing `arduino_secrets.h` + recompiling
+- Mode selection from browser
+- Live board state + FEN export
+- Difficulty selection
+- Resign / Draw buttons
+- Move history (in-RAM)
+
+Will not match [`joojoooo`](https://github.com/joojoooo/OpenChess)'s depth (no themes, no move sounds, no evaluation graphs) — just enough to remove the recompile pain point.
+
+### Speculative for v1.3.0-rp2040 — Lichess (only if there's demand)
+
+- Online Lichess play via NDJSON streaming over HTTPS long-poll (Lichess Bot API)
+- Realistic but fragile on WiFiNINA: heap fragmentation over long games, TLS handshake latency on Cloudflare reconnect (~3-5 s gap), token storage
+- Honest estimate: 3-4 sessions of work + tuning
+- **Most users wanting Lichess on a physical board are better served by [`joojoooo/OpenChess`](https://github.com/joojoooo/OpenChess) on an ESP32**, so this is low-priority unless someone files a feature request
+
+### Won't fix (architectural limits of the RP2040)
+
+- **OTA firmware updates** — RP2040 has no dual flash partition (A/B), no `Update.h`. The upstream mbed core attempted a `second_stage_ota` patch and reverted it. A custom bootloader is theoretically possible but has weeks of development cost and a real risk of bricking user boards. The `.uf2` drag-and-drop workflow is the moral equivalent (5 seconds of user time).
+- **Web Flasher** — no WebUSB driver path for the RP2040. `.uf2` drag-and-drop replaces it.
+- **Lichess WebSocket** transport — not used by Lichess Bot API anyway (NDJSON over HTTPS instead).
+
+If you need any of the above, **use [`joojoooo/OpenChess`](https://github.com/joojoooo/OpenChess) on an ESP32**. It's the right tool for that job.
+
+See [README roadmap](README.md#-roadmap) and [docs/COMPARISON.md](docs/COMPARISON.md) for the latest.
 
 [v1.0.0-rp2040]: https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.0.0-rp2040

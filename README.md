@@ -181,9 +181,9 @@ Full BOM with prices and Amazon links: [openchess/docs/BOM.md](https://github.co
 | **Hardware** | Nano RP2040 | Nano RP2040 (drop-in) | **ESP32** (jumpers required) |
 | **Chess rules** | Pseudo-legal only | Full FIDE | Full FIDE + 3-fold rep |
 | **AI mode** | ❌ broken | ✅ Stockfish.online | ✅ Stockfish.online |
-| **Lichess online** | ❌ | ❌ (WiFiNINA limits) | ✅ |
-| **Web UI** | ❌ | ❌ | ✅ |
-| **OTA updates** | ❌ | ❌ | ✅ |
+| **Lichess online** | ❌ | ⏳ v1.3 (speculative) | ✅ |
+| **Web UI** | ❌ | ⏳ v1.2 planned | ✅ |
+| **OTA updates** | ❌ | ❌ won't fix (no dual flash partition) | ✅ |
 | **Self-tests** | ❌ | ✅ 10 at boot | ❌ |
 
 > If you have an ESP32 and don't mind re-soldering with jumper wires, **[joojoooo/OpenChess](https://github.com/joojoooo/OpenChess) is the more powerful firmware**. This fork exists because the Concept-Bytes Kickstarter campaign shipped the **Nano RP2040 Connect** — the official firmware for that exact MCU has been broken and unmaintained since Aug 2025, leaving backers without working AI mode.
@@ -214,7 +214,7 @@ For build documentation issues (BOM, photos, instructions), open at [`semichcsc-
 
 ## 🎯 Roadmap
 
-In priority order, all RP2040-friendly:
+### v1.1.0-rp2040 — small, high-impact (next)
 
 1. **5-char API move parsing** so AI mode supports promotion choice (`e7e8q`)
 2. **Difficulty selection at runtime** (no recompile)
@@ -222,7 +222,29 @@ In priority order, all RP2040-friendly:
 4. **Async LED animations** (state-machine refactor)
 5. **3-fold repetition** if RAM allows
 
-Out of scope (require ESP32): OTA updates, Web UI, Lichess. For these features, see [joojoooo/OpenChess](https://github.com/joojoooo/OpenChess).
+### v1.2.0-rp2040 — Web UI (medium effort, very high value)
+
+The LittleFS partition is available on the mbed core and the existing `wifi_manager.cpp` AP/HTTP server can be extended. Realistic deliverables:
+
+- Configure WiFi without editing `arduino_secrets.h` + recompiling 🙌
+- Mode selection from browser
+- Live board state + FEN export
+- Difficulty selection
+- Resign / Draw buttons
+- Move history (in-RAM)
+
+Won't match [joojoooo](https://github.com/joojoooo/OpenChess)'s depth (no themes, no move sounds, no evaluation graphs) — just enough to remove the recompile-for-WiFi pain point.
+
+### v1.3.0-rp2040 — Lichess (speculative, only if there's user demand)
+
+Technically possible: Lichess Bot API uses NDJSON over HTTPS long-poll, which WiFiNINA can sustain. But fragile (heap fragmentation, TLS reconnect latency, token storage). Effort: 3-4 sessions + tuning. **For Lichess on a physical board today, use [`joojoooo/OpenChess`](https://github.com/joojoooo/OpenChess) on an ESP32** — it's the right tool.
+
+### Won't fix (RP2040 architectural limits)
+
+- **OTA firmware updates** — RP2040 has no dual flash partition + no `Update.h`. The upstream mbed core tried (`second_stage_ota` patch) and reverted. Use the `.uf2` drag-and-drop workflow instead (5 seconds).
+- **Web Flasher** — no WebUSB on RP2040. `.uf2` is the moral equivalent.
+
+If you need OTA or Web Flasher, the answer is honest: **migrate to ESP32 + [`joojoooo/OpenChess`](https://github.com/joojoooo/OpenChess)**.
 
 ---
 
