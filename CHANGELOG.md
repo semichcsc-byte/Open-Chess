@@ -2,6 +2,34 @@
 
 All user-visible changes to this firmware fork. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [v1.1.2-rp2040] — 2026-05-11
+
+Patch release: don't strand the user with a frozen bot when Stockfish times out.
+
+🔗 [Release page](https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.1.2-rp2040)
+
+### Fixed
+
+- **Bot stuck after API timeout / parse failure.** When `makeStockfishRequest` returned an empty response (network blip, `stockfish.online` slow, transient TLS failure) or `parseStockfishResponse` / `parseMove` failed, `botThinking` was correctly cleared but `isWhiteTurn` stayed `false`. The next loop iteration of `chess_bot::update()` saw `isWhiteTurn == false && botThinking == false` and just sat idle, frozen, without telling the user. The only escape was the reset gesture (which then required setting up the board from scratch).
+
+  Fix: all three failure paths in `makeBotMove` now reset `isWhiteTurn = true` so the user can retry the move. Added a brief red flash on rank 8 in the API-no-response case so the user knows the bot couldn't respond rather than guessing whether they missed something.
+
+### Verified
+
+```
+Sketch uses 148398 bytes (0%) of program storage space.
+Global variables use 44640 bytes (16%) of dynamic memory.
+=== Self-tests complete: 10/10 passed ===
+```
+
+Tested by killing my router mid-move; the board flashed red on rank 8 and gave the turn back so the move could be retried after the network recovered.
+
+### Known issue (still deferred to v1.2)
+
+Row-axis mirror in serial debug print — see v1.1.1 notes.
+
+---
+
 ## [v1.1.1-rp2040] — 2026-05-11
 
 Patch release: add a non-blocking 'bot thinking' animation that survives the WiFiSSL TLS handshake.
@@ -180,3 +208,5 @@ See [README roadmap](README.md#-roadmap) and [docs/COMPARISON.md](docs/COMPARISO
 
 [v1.0.0-rp2040]: https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.0.0-rp2040
 [v1.1.0-rp2040]: https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.1.0-rp2040
+[v1.1.1-rp2040]: https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.1.1-rp2040
+[v1.1.2-rp2040]: https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.1.2-rp2040

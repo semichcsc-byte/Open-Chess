@@ -424,16 +424,33 @@ void ChessBot::makeBotMove() {
                 
                 Serial.println("Bot move completed. Your turn!");
             } else {
-                Serial.println("Failed to parse bot move");
+                Serial.println("Failed to parse bot move - returning turn to player");
                 botThinking = false;
+                isWhiteTurn = true;
             }
         } else {
-            Serial.println("Failed to parse Stockfish response");
+            Serial.println("Failed to parse Stockfish response - returning turn to player");
             botThinking = false;
+            isWhiteTurn = true;
         }
     } else {
-        Serial.println("No response from Stockfish API");
+        // API timeout, network blip, or stockfish.online down. Don't strand
+        // the user with a frozen bot -- give the turn back so they can move
+        // and try again. The next move will trigger another API call which
+        // will probably succeed if the failure was transient.
+        Serial.println("No response from Stockfish API - returning turn to player, please try a different move or wait");
         botThinking = false;
+        isWhiteTurn = true;
+        // Visual feedback: brief red flash on rank 8 to tell the user the
+        // bot couldn't respond this round.
+        for (int i = 0; i < 3; i++) {
+            for (int c = 0; c < 8; c++) _boardDriver->setSquareLED(7, c, 200, 0, 0);
+            _boardDriver->showLEDs();
+            delay(150);
+            _boardDriver->clearAllLEDs();
+            _boardDriver->showLEDs();
+            delay(150);
+        }
     }
 }
 
