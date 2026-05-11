@@ -24,6 +24,8 @@ private:
         {'p','p','p','p','p','p','p','p'},  // row 6 (rank 7)
         {'r','n','b','q','k','b','n','r'}   // row 7 (rank 8)
     };
+
+    GameState state; // castling rights, en-passant, halfmove clock
     
     StockfishSettings settings;
     BotDifficulty difficulty;

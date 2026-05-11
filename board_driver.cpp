@@ -47,6 +47,8 @@ void BoardDriver::begin() {
         for (int col = 0; col < 8; col++) {
             sensorState[row][col] = false;
             sensorPrev[row][col] = false;
+            sensorRawLast[row][col] = false;
+            sensorStableCount[row][col] = 0;
         }
     }
 }
@@ -72,7 +74,20 @@ void BoardDriver::readSensors() {
         delayMicroseconds(100);
         for (int col = 0; col < NUM_COLS; col++) {
             int sensorVal = digitalRead(colPins[col]);
-            sensorState[row][col] = (sensorVal == LOW);
+            bool raw = (sensorVal == LOW);
+
+            // Debounce: only flip the public state after N consecutive
+            // identical raw reads. Prevents spurious detections when
+            // pieces slide across squares or noise hits the hall sensor.
+            if (raw == sensorRawLast[row][col]) {
+                if (sensorStableCount[row][col] < 255) sensorStableCount[row][col]++;
+            } else {
+                sensorRawLast[row][col] = raw;
+                sensorStableCount[row][col] = 1;
+            }
+            if (sensorStableCount[row][col] >= SENSOR_DEBOUNCE_SCANS) {
+                sensorState[row][col] = raw;
+            }
         }
     }
     loadShiftRegister(0x00);

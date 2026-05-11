@@ -17,6 +17,9 @@ private:
     
     // Internal board state for gameplay
     char board[8][8];
+    GameState state;
+    char turnColor; // 'w' or 'b'
+    bool gameOver;
     
     // Helper functions
     void initializeBoard();
@@ -24,6 +27,9 @@ private:
     void processMove(int fromRow, int fromCol, int toRow, int toCol, char piece);
     void checkForPromotion(int targetRow, int targetCol, char piece);
     void handlePromotion(int targetRow, int targetCol, char piece);
+    char askPromotionChoice(char color); // returns Q/R/B/N (uppercase if white, lowercase if black)
+    void announceGameResult(GameResult r);
+    void blinkKingInCheck(char color);
 
 public:
     ChessMoves(BoardDriver* bd, ChessEngine* ce);

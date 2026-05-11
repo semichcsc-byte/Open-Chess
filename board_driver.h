@@ -12,6 +12,12 @@
 #define LED_COUNT   (NUM_ROWS * NUM_COLS)
 #define BRIGHTNESS  100
 
+// Debounce: a sensor reading must be the same for this many consecutive
+// scans before the public state flips. Each readSensors() call adds 1
+// scan, so with the ~50ms loop delay this is roughly N*50ms of stability.
+// Tune up if pieces give false-positive flickers when sliding.
+#define SENSOR_DEBOUNCE_SCANS 3
+
 // Shift Register (74HC594) Pins
 #define SER_PIN     2   // Serial data input (74HC594 pin 14)
 #define SRCLK_PIN   3   // Shift register clock (pin 11)
@@ -30,7 +36,12 @@ private:
     byte rowPatterns[8];
     bool sensorState[8][8];
     bool sensorPrev[8][8];
-    
+
+    // Debounce buffers: latest raw read, count of consecutive identical
+    // raw reads since the public state last changed.
+    bool sensorRawLast[8][8];
+    uint8_t sensorStableCount[8][8];
+
     void loadShiftRegister(byte data);
     int getPixelIndex(int row, int col);
 

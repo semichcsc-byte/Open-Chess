@@ -144,7 +144,7 @@ void ChessBot::update() {
                             // Show possible moves
                             int moveCount = 0;
                             int moves[MAX_MOVES_PER_PIECE][2];
-                            _chessEngine->getPossibleMoves(board, row, col, moveCount, moves);
+                            _chessEngine->getLegalMoves(board, &state, row, col, moveCount, moves);
                             
                             for (int i = 0; i < moveCount; i++) {
                                 _boardDriver->setSquareLED(moves[i][0], moves[i][1], 255, 255, 255); // White
@@ -234,7 +234,7 @@ void ChessBot::update() {
                             // Show possible moves again
                             int moveCount = 0;
                             int moves[MAX_MOVES_PER_PIECE][2];
-                            _chessEngine->getPossibleMoves(board, selectedRow, selectedCol, moveCount, moves);
+                            _chessEngine->getLegalMoves(board, &state, selectedRow, selectedCol, moveCount, moves);
                             
                             for (int i = 0; i < moveCount; i++) {
                                 _boardDriver->setSquareLED(moves[i][0], moves[i][1], 255, 255, 255); // White
@@ -436,7 +436,7 @@ void ChessBot::makeBotMove() {
                     botThinking = false;
                     return;
                 }
-                if (!_chessEngine->isValidMove(board, fromRow, fromCol, toRow, toCol)) {
+                if (!_chessEngine->isLegalMove(board, &state, fromRow, fromCol, toRow, toCol)) {
                     Serial.print("Bot move ");
                     Serial.print(bestMove);
                     Serial.println(" rejected by local engine - aborting, returning to player");
@@ -563,11 +563,12 @@ bool ChessBot::parseMove(String move, int &fromRow, int &fromCol, int &toRow, in
 void ChessBot::executeBotMove(int fromRow, int fromCol, int toRow, int toCol) {
     char piece = board[fromRow][fromCol];
     char capturedPiece = board[toRow][toCol];
-    
-    // Update board state
-    board[toRow][toCol] = piece;
-    board[fromRow][fromCol] = ' ';
-    
+
+    // Apply via engine: handles castling rook, en-passant capture, state updates.
+    // Bot always promotes to queen (the Stockfish API string includes a 5th
+    // char like 'e7e8q' for promotion; we don't parse it yet so default to Q).
+    _chessEngine->applyMove(board, &state, fromRow, fromCol, toRow, toCol);
+
     Serial.print("Bot wants to move piece from ");
     Serial.print((char)('a' + fromCol));
     Serial.print(8 - fromRow);
@@ -575,22 +576,50 @@ void ChessBot::executeBotMove(int fromRow, int fromCol, int toRow, int toCol) {
     Serial.print((char)('a' + toCol));
     Serial.println(8 - toRow);
     Serial.println("Please make this move on the physical board...");
-    
-    // Show the move that needs to be made
+
     showBotMoveIndicator(fromRow, fromCol, toRow, toCol);
-    
-    // Wait for user to physically complete the bot's move
     waitForBotMoveCompletion(fromRow, fromCol, toRow, toCol);
-    
+
     if (capturedPiece != ' ') {
         Serial.print("Piece captured: ");
         Serial.println(capturedPiece);
         _boardDriver->captureAnimation();
     }
-    
-    // Flash confirmation on the destination square
+
     confirmSquareCompletion(toRow, toCol);
-    
+
+    // Game over after bot move?
+    GameResult r = _chessEngine->getGameResult(board, &state, 'w');
+    if (r != GAME_ONGOING) {
+        Serial.print("Game over after bot move: result=");
+        Serial.println(r);
+        if (r == GAME_CHECKMATE_BLACK_WINS) {
+            // Bot won. Pulse red.
+            for (int p = 0; p < 3; p++) {
+                for (int rr = 0; rr < 8; rr++)
+                    for (int cc = 0; cc < 8; cc++)
+                        _boardDriver->setSquareLED(rr, cc, 255, 0, 0, 0);
+                _boardDriver->showLEDs(); delay(300);
+                _boardDriver->clearAllLEDs(); delay(300);
+            }
+        } else if (r == GAME_STALEMATE || r == GAME_DRAW_50_MOVE || r == GAME_DRAW_INSUFFICIENT_MATERIAL) {
+            _boardDriver->fireworkAnimation();
+        }
+    } else if (_chessEngine->isInCheck(board, 'w')) {
+        Serial.println("You are in CHECK!");
+        // Blink white king
+        for (int rr = 0; rr < 8; rr++)
+            for (int cc = 0; cc < 8; cc++)
+                if (board[rr][cc] == 'K') {
+                    for (int b = 0; b < 3; b++) {
+                        _boardDriver->setSquareLED(rr, cc, 255, 0, 0, 0);
+                        _boardDriver->showLEDs(); delay(150);
+                        _boardDriver->setSquareLED(rr, cc, 0, 0, 0, 0);
+                        _boardDriver->showLEDs(); delay(150);
+                    }
+                }
+    }
+
     Serial.println("Bot move completed. Your turn!");
 }
 
@@ -626,6 +655,8 @@ void ChessBot::showConnectionStatus() {
 }
 
 void ChessBot::initializeBoard() {
+    // Reset game state (castling rights, en-passant, halfmove clock)
+    state.reset();
     // Copy initial board state
     for (int row = 0; row < 8; row++) {
         for (int col = 0; col < 8; col++) {
@@ -654,11 +685,11 @@ void ChessBot::waitForBoardSetup() {
 
 void ChessBot::processPlayerMove(int fromRow, int fromCol, int toRow, int toCol, char piece) {
     char capturedPiece = board[toRow][toCol];
-    
-    // Update board state
-    board[toRow][toCol] = piece;
-    board[fromRow][fromCol] = ' ';
-    
+
+    // Apply via engine: handles castling rook, en-passant capture, state updates,
+    // and auto-promotes to queen (player can't currently choose in bot mode).
+    _chessEngine->applyMove(board, &state, fromRow, fromCol, toRow, toCol);
+
     Serial.print("Player moved ");
     Serial.print(piece);
     Serial.print(" from ");
@@ -667,19 +698,16 @@ void ChessBot::processPlayerMove(int fromRow, int fromCol, int toRow, int toCol,
     Serial.print(" to ");
     Serial.print((char)('a' + toCol));
     Serial.println(8 - toRow);
-    
+
     if (capturedPiece != ' ') {
         Serial.print("Captured ");
         Serial.println(capturedPiece);
         _boardDriver->captureAnimation();
     }
-    
-    // Check for pawn promotion
+
     if (_chessEngine->isPawnPromotion(piece, toRow)) {
-        char promotedPiece = _chessEngine->getPromotedPiece(piece);
-        board[toRow][toCol] = promotedPiece;
-        Serial.print("Pawn promoted to ");
-        Serial.println(promotedPiece);
+        Serial.print("Pawn auto-promoted to ");
+        Serial.println(board[toRow][toCol]);
         _boardDriver->promotionAnimation(toCol);
     }
 }

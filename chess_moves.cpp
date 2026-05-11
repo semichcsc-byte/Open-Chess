@@ -3,318 +3,361 @@
 
 // Expected initial configuration (as printed in the grid)
 const char ChessMoves::INITIAL_BOARD[8][8] = {
-  {'R', 'N', 'B', 'Q', 'K', 'B', 'N', 'R'},  // row 0 (rank 1)
+  {'R', 'N', 'B', 'Q', 'K', 'B', 'N', 'R'},  // row 0 (rank 1) - white back rank
   {'P', 'P', 'P', 'P', 'P', 'P', 'P', 'P'},  // row 1 (rank 2)
-  {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},    // row 2 (rank 3)
-  {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},    // row 3 (rank 4)
-  {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},    // row 4 (rank 5)
-  {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},    // row 5 (rank 6)
-  {'p', 'p', 'p', 'p', 'p', 'p', 'p', 'p'},    // row 6 (rank 7)
-  {'r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'}     // row 7 (rank 8)
+  {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},
+  {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},
+  {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},
+  {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '},
+  {'p', 'p', 'p', 'p', 'p', 'p', 'p', 'p'},  // row 6 (rank 7)
+  {'r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'}   // row 7 (rank 8) - black back rank
 };
 
 ChessMoves::ChessMoves(BoardDriver* bd, ChessEngine* ce) : boardDriver(bd), chessEngine(ce) {
-    // Initialize board state
     initializeBoard();
+    state.reset();
+    turnColor = 'w';
+    gameOver = false;
 }
 
 void ChessMoves::begin() {
-    Serial.println("Starting Chess Game Mode...");
-    
-    // Copy expected configuration into our board state
-    initializeBoard();
+    Serial.println("Starting Chess Game Mode (Human vs Human)...");
 
-    // Wait for board setup
+    initializeBoard();
+    state.reset();
+    turnColor = 'w';
+    gameOver = false;
+
     waitForBoardSetup();
-    
+
     Serial.println("Chess game ready to start!");
     boardDriver->fireworkAnimation();
 
-    // Initialize sensor previous state for move detection
     boardDriver->readSensors();
     boardDriver->updateSensorPrev();
 }
 
 void ChessMoves::update() {
+    if (gameOver) {
+        delay(500);
+        return;
+    }
+
     boardDriver->readSensors();
 
-    // Look for a piece pickup
+    // Look for a piece pickup (sensor went from active to inactive)
     for (int row = 0; row < 8; row++) {
         for (int col = 0; col < 8; col++) {
-            if (boardDriver->getSensorPrev(row, col) && !boardDriver->getSensorState(row, col)) {
-                char piece = board[row][col];
-                
-                // Skip empty squares
-                if (piece == ' ') continue;
-                
-                Serial.print("Piece lifted from ");
-                Serial.print((char)('a' + col));
-                Serial.println(row + 1);
-                
-                // Generate possible moves
-                int moveCount = 0;
-                int moves[MAX_MOVES_PER_PIECE][2]; // sized via chess_engine.h constant
-                chessEngine->getPossibleMoves(board, row, col, moveCount, moves);
-                
-                // Light up current square and possible move squares
-                boardDriver->setSquareLED(row, col, 0, 0, 0, 100); // Dimmer, but solid
-                
-                // Highlight possible move squares (including captures)
-                for (int i = 0; i < moveCount; i++) {
-                    int r = moves[i][0];
-                    int c = moves[i][1];
-                    
-                    // Different highlighting for empty squares vs capture squares
-                    if (board[r][c] == ' ') {
-                        boardDriver->setSquareLED(r, c, 0, 0, 0, 50); // Soft white for moves
+            if (!(boardDriver->getSensorPrev(row, col) && !boardDriver->getSensorState(row, col))) continue;
+
+            char piece = board[row][col];
+            if (piece == ' ') continue;
+
+            // Enforce turn order
+            if (chessEngine->getPieceColor(piece) != turnColor) {
+                Serial.print("Wrong turn: it's ");
+                Serial.print(turnColor == 'w' ? "white" : "black");
+                Serial.print(" to move, but lifted ");
+                Serial.println(piece);
+                // Brief red blink to signal wrong color, but don't block - user will replace
+                boardDriver->blinkSquare(row, col, 1);
+                boardDriver->updateSensorPrev();
+                return;
+            }
+
+            Serial.print("Piece lifted from ");
+            Serial.print((char)('a' + col));
+            Serial.println(row + 1);
+
+            // Generate LEGAL moves (filters self-check, includes castling/en-passant)
+            int moveCount = 0;
+            int moves[MAX_MOVES_PER_PIECE][2];
+            chessEngine->getLegalMoves(board, &state, row, col, moveCount, moves);
+
+            if (moveCount == 0) {
+                Serial.println("No legal moves for this piece (pinned or no escape)");
+                boardDriver->blinkSquare(row, col, 2);
+                boardDriver->updateSensorPrev();
+                return;
+            }
+
+            // Light up source + possible move squares
+            boardDriver->setSquareLED(row, col, 0, 0, 0, 100); // Soft white source
+            for (int i = 0; i < moveCount; i++) {
+                int r = moves[i][0];
+                int c = moves[i][1];
+                if (board[r][c] == ' ') {
+                    // En-passant target square shows pink (capture but empty)
+                    if (state.enPassantRow == r && state.enPassantCol == c &&
+                        (piece == 'P' || piece == 'p')) {
+                        boardDriver->setSquareLED(r, c, 200, 0, 100, 0);
                     } else {
-                        boardDriver->setSquareLED(r, c, 255, 0, 0, 50); // Red tint for captures
-                    }
-                }
-                boardDriver->showLEDs();
-                
-                // Wait for piece placement - handle both normal moves and captures
-                int targetRow = -1, targetCol = -1;
-                bool piecePlaced = false;
-                bool captureInProgress = false;
-
-                // Wait for a piece placement on any square
-                while (!piecePlaced) {
-                    boardDriver->readSensors();
-                    
-                    // First check if the original piece was placed back
-                    if (boardDriver->getSensorState(row, col)) {
-                        targetRow = row;
-                        targetCol = col;
-                        piecePlaced = true;
-                        break;
-                    }
-                    
-                    // Then check all squares for a regular move or capture initiation
-                    for (int r2 = 0; r2 < 8; r2++) {
-                        for (int c2 = 0; c2 < 8; c2++) {
-                            // Skip the original square which was already checked
-                            if (r2 == row && c2 == col) continue;
-                            
-                            // Check if this would be a legal move
-                            bool isLegalMove = false;
-                            for (int i = 0; i < moveCount; i++) {
-                                if (moves[i][0] == r2 && moves[i][1] == c2) {
-                                    isLegalMove = true;
-                                    break;
-                                }
-                            }
-                            
-                            // If not a legal move, no need to check further
-                            if (!isLegalMove) continue;
-                            
-                            // For capture moves: detect when the target piece is removed
-                            if (board[r2][c2] != ' ' && !boardDriver->getSensorState(r2, c2) && boardDriver->getSensorPrev(r2, c2)) {
-                                Serial.print("Capture initiated at ");
-                                Serial.print((char)('a' + c2));
-                                Serial.println(r2 + 1);
-                                
-                                // Store the target square and wait for the capturing piece to be placed there
-                                targetRow = r2;
-                                targetCol = c2;
-                                captureInProgress = true;
-                                
-                                // Flash the capture square to indicate waiting for piece placement
-                                boardDriver->setSquareLED(r2, c2, 255, 0, 0, 100);
-                                boardDriver->showLEDs();
-                                
-                                // Wait for the capturing piece to be placed
-                                bool capturePiecePlaced = false;
-                                while (!capturePiecePlaced) {
-                                    boardDriver->readSensors();
-                                    if (boardDriver->getSensorState(r2, c2)) {
-                                        capturePiecePlaced = true;
-                                        piecePlaced = true;
-                                        break;
-                                    }
-                                    delay(50);
-                                }
-                                break;
-                            }
-                            
-                            // For normal non-capture moves: detect when a piece is placed on an empty square
-                            else if (board[r2][c2] == ' ' && boardDriver->getSensorState(r2, c2) && !boardDriver->getSensorPrev(r2, c2)) {
-                                targetRow = r2;
-                                targetCol = c2;
-                                piecePlaced = true;
-                                break;
-                            }
-                        }
-                        if (piecePlaced || captureInProgress) break;
-                    }
-                    
-                    delay(50);
-                }
-
-                // Check if piece is replaced in the original spot
-                if (targetRow == row && targetCol == col) {
-                    Serial.println("Piece replaced in original spot");
-                    // Blink once to confirm
-                    boardDriver->setSquareLED(row, col, 0, 0, 0, 255);
-                    boardDriver->showLEDs();
-                    delay(200);
-                    boardDriver->setSquareLED(row, col, 0, 0, 0, 100);
-                    boardDriver->showLEDs();
-                    
-                    // Clear all LED effects
-                    boardDriver->clearAllLEDs();
-                    
-                    continue; // Skip to next iteration
-                }
-                
-                // Check if move is legal
-                bool legalMove = false;
-                bool isCapture = false;
-                for (int i = 0; i < moveCount; i++) {
-                    if (moves[i][0] == targetRow && moves[i][1] == targetCol) {
-                        legalMove = true;
-                        // Check if this is a capture move
-                        if (board[targetRow][targetCol] != ' ') {
-                            isCapture = true;
-                        }
-                        break;
-                    }
-                }
-                
-                if (legalMove) {
-                    Serial.print("Legal move to ");
-                    Serial.print((char)('a' + targetCol));
-                    Serial.println(targetRow + 1);
-                    
-                    // Play capture animation if needed
-                    if (board[targetRow][targetCol] != ' ') {
-                        Serial.println("Performing capture animation");
-                        boardDriver->captureAnimation();
-                    }
-                    
-                    // Process the move
-                    processMove(row, col, targetRow, targetCol, piece);
-                    
-                    // Check for pawn promotion
-                    checkForPromotion(targetRow, targetCol, piece);
-                    
-                    // Confirmation: Double blink destination square
-                    for (int blink = 0; blink < 2; blink++) {
-                        boardDriver->setSquareLED(targetRow, targetCol, 0, 0, 0, 255);
-                        boardDriver->showLEDs();
-                        delay(200);
-                        boardDriver->setSquareLED(targetRow, targetCol, 0, 0, 0, 50);
-                        boardDriver->showLEDs();
-                        delay(200);
+                        boardDriver->setSquareLED(r, c, 0, 0, 0, 50);
                     }
                 } else {
-                    Serial.println("Illegal move, reverting");
+                    boardDriver->setSquareLED(r, c, 255, 0, 0, 50); // Red = capture
                 }
-                
-                // Clear any remaining LED effects
-                boardDriver->clearAllLEDs();
             }
+            boardDriver->showLEDs();
+
+            // Wait for piece placement
+            int targetRow = -1, targetCol = -1;
+            bool piecePlaced = false;
+            bool captureInProgress = false;
+
+            while (!piecePlaced) {
+                boardDriver->readSensors();
+
+                // Returned to original square: cancel
+                if (boardDriver->getSensorState(row, col)) {
+                    targetRow = row; targetCol = col;
+                    piecePlaced = true;
+                    break;
+                }
+
+                for (int r2 = 0; r2 < 8 && !piecePlaced; r2++) {
+                    for (int c2 = 0; c2 < 8 && !piecePlaced; c2++) {
+                        if (r2 == row && c2 == col) continue;
+
+                        bool isLegalDest = false;
+                        for (int i = 0; i < moveCount; i++) {
+                            if (moves[i][0] == r2 && moves[i][1] == c2) { isLegalDest = true; break; }
+                        }
+                        if (!isLegalDest) continue;
+
+                        // Capture: enemy piece lifted from target
+                        if (board[r2][c2] != ' ' && !boardDriver->getSensorState(r2, c2) && boardDriver->getSensorPrev(r2, c2)) {
+                            Serial.print("Capture initiated at ");
+                            Serial.print((char)('a' + c2));
+                            Serial.println(r2 + 1);
+                            targetRow = r2; targetCol = c2;
+                            captureInProgress = true;
+                            boardDriver->setSquareLED(r2, c2, 255, 0, 0, 100);
+                            boardDriver->showLEDs();
+                            // Wait for capturing piece to be placed on target
+                            while (true) {
+                                boardDriver->readSensors();
+                                if (boardDriver->getSensorState(r2, c2)) {
+                                    piecePlaced = true;
+                                    break;
+                                }
+                                delay(50);
+                            }
+                            break;
+                        }
+
+                        // Quiet move: piece appeared on empty target
+                        if (board[r2][c2] == ' ' && boardDriver->getSensorState(r2, c2) && !boardDriver->getSensorPrev(r2, c2)) {
+                            targetRow = r2; targetCol = c2;
+                            piecePlaced = true;
+                            break;
+                        }
+                    }
+                }
+                delay(50);
+            }
+
+            // Cancelled (piece replaced)
+            if (targetRow == row && targetCol == col) {
+                Serial.println("Piece replaced - move cancelled");
+                boardDriver->clearAllLEDs();
+                boardDriver->updateSensorPrev();
+                return;
+            }
+
+            // Apply the move via the engine (handles castling rook, EP, state updates)
+            char promotedTo = 0;
+            if (chessEngine->isPawnPromotion(piece, targetRow)) {
+                Serial.println("Promotion! Choose your piece on the selector LEDs.");
+                boardDriver->promotionAnimation(targetCol);
+                promotedTo = askPromotionChoice(turnColor);
+                Serial.print("Promoted to: "); Serial.println(promotedTo);
+            }
+
+            bool wasCapture = (board[targetRow][targetCol] != ' ') ||
+                              chessEngine->isEnPassantMove(board, &state, row, col, targetRow, targetCol);
+            if (wasCapture) boardDriver->captureAnimation();
+
+            chessEngine->applyMove(board, &state, row, col, targetRow, targetCol, promotedTo);
+
+            // Confirmation: double blink dest
+            for (int b = 0; b < 2; b++) {
+                boardDriver->setSquareLED(targetRow, targetCol, 0, 0, 0, 255);
+                boardDriver->showLEDs();
+                delay(150);
+                boardDriver->setSquareLED(targetRow, targetCol, 0, 0, 0, 50);
+                boardDriver->showLEDs();
+                delay(150);
+            }
+            boardDriver->clearAllLEDs();
+
+            // Switch turn
+            turnColor = (turnColor == 'w') ? 'b' : 'w';
+
+            // Game over?
+            GameResult result = chessEngine->getGameResult(board, &state, turnColor);
+            if (result != GAME_ONGOING) {
+                announceGameResult(result);
+                gameOver = true;
+                boardDriver->updateSensorPrev();
+                return;
+            }
+
+            // Check announcement
+            if (chessEngine->isInCheck(board, turnColor)) {
+                Serial.print(turnColor == 'w' ? "White" : "Black");
+                Serial.println(" is in CHECK!");
+                blinkKingInCheck(turnColor);
+            }
+
+            boardDriver->updateSensorPrev();
+            return;
         }
     }
-    
-    // Update previous sensor state
+
     boardDriver->updateSensorPrev();
 }
 
 void ChessMoves::initializeBoard() {
-    for (int row = 0; row < 8; row++) {
-        for (int col = 0; col < 8; col++) {
+    for (int row = 0; row < 8; row++)
+        for (int col = 0; col < 8; col++)
             board[row][col] = INITIAL_BOARD[row][col];
-        }
-    }
 }
 
 void ChessMoves::waitForBoardSetup() {
     Serial.println("Waiting for pieces to be placed...");
     while (!boardDriver->checkInitialBoard(INITIAL_BOARD)) {
         boardDriver->updateSetupDisplay(INITIAL_BOARD);
-        boardDriver->printBoardState(INITIAL_BOARD);
-        delay(500);
+        delay(200);
     }
 }
 
 void ChessMoves::processMove(int fromRow, int fromCol, int toRow, int toCol, char piece) {
-    // Update board state
+    // Legacy entrypoint kept for compatibility; new code uses applyMove via engine.
     board[toRow][toCol] = piece;
     board[fromRow][fromCol] = ' ';
 }
 
 void ChessMoves::checkForPromotion(int targetRow, int targetCol, char piece) {
-    if (chessEngine->isPawnPromotion(piece, targetRow)) {
-        char promotedPiece = chessEngine->getPromotedPiece(piece);
-        
-        Serial.print((piece == 'P' ? "White" : "Black"));
-        Serial.print(" pawn promoted to Queen at ");
-        Serial.print((char)('a' + targetCol));
-        Serial.println((piece == 'P' ? "8" : "1"));
-        
-        // Play promotion animation
-        boardDriver->promotionAnimation(targetCol);
-        
-        // Promote to queen in board state
-        board[targetRow][targetCol] = promotedPiece;
-        
-        // Handle the promotion process
-        handlePromotion(targetRow, targetCol, piece);
-    }
+    // Legacy stub - promotion is now handled inline in update() before applyMove.
+    (void)targetRow; (void)targetCol; (void)piece;
 }
 
 void ChessMoves::handlePromotion(int targetRow, int targetCol, char piece) {
-    Serial.println("Please replace the pawn with a queen piece");
-    
-    // First wait for the pawn to be removed
-    while (boardDriver->getSensorState(targetRow, targetCol)) {
-        // Blink the square to indicate action needed
-        boardDriver->setSquareLED(targetRow, targetCol, 255, 215, 0, 50);
-        boardDriver->showLEDs();
-        delay(250);
-        boardDriver->setSquareLED(targetRow, targetCol, 0, 0, 0, 0);
-        boardDriver->showLEDs();
-        delay(250);
-        
-        // Read sensors
+    (void)targetRow; (void)targetCol; (void)piece;
+}
+
+// Show 4 selector LEDs in the back rank (a1/b1/c1/d1 for white,
+// a8/b8/c8/d8 for black) representing Q/R/B/N. The user places any
+// chess piece on the desired square. We pick the first sensor that
+// goes active among the four selector squares.
+char ChessMoves::askPromotionChoice(char color) {
+    int row = (color == 'w') ? 0 : 7;
+    // Light selector squares with distinct colors:
+    // a-file = Q (gold), b-file = R (red), c-file = B (blue), d-file = N (white)
+    boardDriver->clearAllLEDs();
+    boardDriver->setSquareLED(row, 0, 255, 215, 0,   0); // Q: gold
+    boardDriver->setSquareLED(row, 1, 255, 0,   0,   0); // R: red
+    boardDriver->setSquareLED(row, 2, 0,   0,   255, 0); // B: blue
+    boardDriver->setSquareLED(row, 3, 0,   0,   0,  255); // N: white
+    boardDriver->showLEDs();
+
+    // First flush the sensor state for these 4 squares
+    boardDriver->readSensors();
+    boardDriver->updateSensorPrev();
+
+    char selected = 0;
+    while (selected == 0) {
         boardDriver->readSensors();
+        // Pick the first selector that transitioned to active
+        for (int c = 0; c < 4; c++) {
+            if (boardDriver->getSensorState(row, c) && !boardDriver->getSensorPrev(row, c)) {
+                switch (c) {
+                    case 0: selected = (color == 'w') ? 'Q' : 'q'; break;
+                    case 1: selected = (color == 'w') ? 'R' : 'r'; break;
+                    case 2: selected = (color == 'w') ? 'B' : 'b'; break;
+                    case 3: selected = (color == 'w') ? 'N' : 'n'; break;
+                }
+                break;
+            }
+        }
+        boardDriver->updateSensorPrev();
+        delay(50);
     }
-    
-    Serial.println("Pawn removed, please place a queen");
-    
-    // Then wait for the queen to be placed
-    while (!boardDriver->getSensorState(targetRow, targetCol)) {
-        // Blink the square to indicate action needed
-        boardDriver->setSquareLED(targetRow, targetCol, 255, 215, 0, 50);
-        boardDriver->showLEDs();
-        delay(250);
-        boardDriver->setSquareLED(targetRow, targetCol, 0, 0, 0, 0);
-        boardDriver->showLEDs();
-        delay(250);
-        
-        // Read sensors
+
+    // Wait for the user to lift the selector piece off the menu so we
+    // don't immediately treat the next loop iteration as a 'move'.
+    while (boardDriver->getSensorState(row, 0) || boardDriver->getSensorState(row, 1) ||
+           boardDriver->getSensorState(row, 2) || boardDriver->getSensorState(row, 3)) {
         boardDriver->readSensors();
+        delay(50);
     }
-    
-    Serial.println("Queen placed, promotion complete");
-    
-    // Final confirmation blink
-    for (int i = 0; i < 3; i++) {
-        boardDriver->setSquareLED(targetRow, targetCol, 255, 215, 0, 50);
-        boardDriver->showLEDs();
-        delay(100);
-        boardDriver->setSquareLED(targetRow, targetCol, 0, 0, 0, 0);
-        boardDriver->showLEDs();
-        delay(100);
+    boardDriver->clearAllLEDs();
+    return selected;
+}
+
+void ChessMoves::announceGameResult(GameResult r) {
+    boardDriver->clearAllLEDs();
+    switch (r) {
+        case GAME_CHECKMATE_WHITE_WINS:
+            Serial.println("CHECKMATE - WHITE WINS");
+            // Light all white squares
+            for (int rr = 0; rr < 8; rr++)
+                for (int cc = 0; cc < 8; cc++)
+                    boardDriver->setSquareLED(rr, cc, 0, 0, 0, 255);
+            boardDriver->showLEDs();
+            break;
+        case GAME_CHECKMATE_BLACK_WINS:
+            Serial.println("CHECKMATE - BLACK WINS");
+            // Pulse red
+            for (int p = 0; p < 3; p++) {
+                for (int rr = 0; rr < 8; rr++)
+                    for (int cc = 0; cc < 8; cc++)
+                        boardDriver->setSquareLED(rr, cc, 255, 0, 0, 0);
+                boardDriver->showLEDs(); delay(300);
+                boardDriver->clearAllLEDs(); delay(300);
+            }
+            break;
+        case GAME_STALEMATE:
+            Serial.println("STALEMATE - Draw");
+            boardDriver->fireworkAnimation();
+            break;
+        case GAME_DRAW_50_MOVE:
+            Serial.println("DRAW - 50-move rule");
+            boardDriver->fireworkAnimation();
+            break;
+        case GAME_DRAW_INSUFFICIENT_MATERIAL:
+            Serial.println("DRAW - Insufficient material");
+            boardDriver->fireworkAnimation();
+            break;
+        default: break;
+    }
+    Serial.println("Reset the board (lift all pieces) to play again.");
+}
+
+void ChessMoves::blinkKingInCheck(char color) {
+    char target = (color == 'w') ? 'K' : 'k';
+    int kr = -1, kc = -1;
+    for (int r = 0; r < 8; r++)
+        for (int c = 0; c < 8; c++)
+            if (board[r][c] == target) { kr = r; kc = c; }
+    if (kr < 0) return;
+    for (int b = 0; b < 3; b++) {
+        boardDriver->setSquareLED(kr, kc, 255, 0, 0, 0);
+        boardDriver->showLEDs(); delay(150);
+        boardDriver->setSquareLED(kr, kc, 0, 0, 0, 0);
+        boardDriver->showLEDs(); delay(150);
     }
 }
 
 bool ChessMoves::isActive() {
-    return true; // Simple implementation for now
+    return !gameOver;
 }
 
 void ChessMoves::reset() {
     boardDriver->clearAllLEDs();
     initializeBoard();
+    state.reset();
+    turnColor = 'w';
+    gameOver = false;
 }

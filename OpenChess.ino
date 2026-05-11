@@ -100,6 +100,24 @@ void setup() {
   boardDriver.begin();
   Serial.println("DEBUG: Board driver initialized successfully");
 
+  // Run chess engine self-tests early. These are pure C++, do not touch
+  // hardware, and finish in <100ms. If a fix breaks the engine we want
+  // to see it in the serial monitor before WiFi setup eats 10+ seconds.
+  int testFailures = chessEngine.runSelfTests();
+  if (testFailures > 0) {
+    Serial.print("WARNING: ");
+    Serial.print(testFailures);
+    Serial.println(" engine self-tests FAILED. Gameplay may be incorrect!");
+    // Flash red briefly to signal the failure to the user
+    for (int i = 0; i < 5; i++) {
+      for (int r = 0; r < 8; r++)
+        for (int c = 0; c < 8; c++)
+          boardDriver.setSquareLED(r, c, 255, 0, 0, 0);
+      boardDriver.showLEDs(); delay(150);
+      boardDriver.clearAllLEDs(); delay(150);
+    }
+  }
+
 #ifdef ENABLE_WIFI
   Serial.println();
   Serial.println("=== WiFi Mode Enabled ===");
@@ -313,6 +331,18 @@ void handleGameSelection() {
 }
 
 void initializeSelectedMode(GameMode mode) {
+  // Shut down the WiFiManager AP for modes that don't need WiFi.
+  // The AP draws ~100mA continuously and creates a visible network
+  // ("OpenChessBoard") that nobody uses once a mode is picked. The
+  // bot mode tears down + reopens WiFi as a station internally
+  // (see PR #9), so we leave it alone for that path.
+#ifdef ENABLE_WIFI
+  if (mode == MODE_CHESS_MOVES || mode == MODE_SENSOR_TEST || mode == MODE_GAME_3) {
+    Serial.println("Shutting down WiFi AP - not needed for this mode.");
+    WiFi.end();
+    delay(500);
+  }
+#endif
   switch (mode) {
     case MODE_CHESS_MOVES:
       Serial.println("Starting Chess Moves (Human vs Human)...");
