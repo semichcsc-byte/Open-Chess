@@ -260,6 +260,16 @@ bool ChessBot::connectToWiFi() {
         return false;
     }
     
+    // Tear down AP mode (set up by WiFiManager during setup) before switching to STA mode.
+    // WiFiNINA on the Arduino Nano RP2040 Connect / Nano 33 IoT / MKR WiFi 1010 cannot run
+    // AP and STA simultaneously. If the AP is left active, WiFi.begin() silently hangs and
+    // the bot mode appears frozen after "Connecting to WiFi..." with no further output.
+    // See: https://github.com/Concept-Bytes/Open-Chess/issues/5
+    Serial.println("Tearing down AP mode before connecting as station...");
+    WiFi.disconnect();
+    WiFi.end();
+    delay(2000);
+    
     Serial.print("Attempting to connect to SSID: ");
     Serial.println(SECRET_SSID);
     
