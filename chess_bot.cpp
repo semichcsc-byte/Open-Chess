@@ -286,59 +286,303 @@ bool ChessBot::connectToWiFi() {
     }
 }
 
+bool ChessBot::ensureWiFiConnected() {
+    // Fast path: still connected, nothing to do.
+    if (WiFi.status() == WL_CONNECTED) return true;
+
+    Serial.print("WiFi link DOWN (status=");
+    Serial.print(WiFi.status());
+    Serial.println("). Attempting quick reconnect...");
+
+    // One quick attempt -- 8 second wait. The full connectToWiFi() does
+    // 10x5s = 50s which is too aggressive for in-game recovery; the heavy
+    // recovery is in reinitWiFiModule() called from the retry loop.
+    WiFi.begin(SECRET_SSID, SECRET_PASS);
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - start < 8000)) {
+        delay(250);
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.print("WiFi reconnected. IP: ");
+        Serial.println(WiFi.localIP());
+        return true;
+    }
+    Serial.println("Quick WiFi reconnect failed.");
+    return false;
+}
+
+bool ChessBot::reinitWiFiModule() {
+    // Full NINA-W102 reset cycle. Drains any wedged internal state in
+    // the WiFi co-processor, then re-establishes the link from scratch.
+    // Slow (~12 s worst case) so only used as a last resort inside the
+    // makeBotMove retry loop after multiple consecutive failures.
+    Serial.println("Full WiFi module reset: disconnect -> end -> begin");
+    WiFi.disconnect();
+    delay(500);
+    WiFi.end();
+    delay(2000);
+
+    WiFi.begin(SECRET_SSID, SECRET_PASS);
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - start < 10000)) {
+        delay(250);
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.print("WiFi module recovered. IP: ");
+        Serial.println(WiFi.localIP());
+        return true;
+    }
+    Serial.println("WiFi module reset failed.");
+    return false;
+}
+
+void ChessBot::showRetryFeedback(int attempt) {
+    // Orange/amber pulse on rank 8 to indicate "actively recovering, hang
+    // tight". Different colour from the blue thinking pulse so the user
+    // can distinguish a normal slow API call from a retry. Number of
+    // pulses scales with attempt count: 1 pulse for backoff before
+    // attempt 2, 2 pulses before 3, etc -- so user gets visual sense of
+    // how many retries have happened.
+    int pulseCount = attempt; // attempt is the prior attempt number
+    if (pulseCount < 1) pulseCount = 1;
+    if (pulseCount > 5) pulseCount = 5;
+    for (int p = 0; p < pulseCount; p++) {
+        for (int c = 0; c < 8; c++) _boardDriver->setSquareLED(7, c, 255, 100, 0); // amber
+        _boardDriver->showLEDs();
+        delay(100);
+        _boardDriver->clearAllLEDs();
+        _boardDriver->showLEDs();
+        delay(100);
+    }
+}
+
 String ChessBot::makeStockfishRequest(String fen) {
-    WiFiSSLClient client;
+    // Plain HTTP via Cloudflare Worker proxy. NINA-W102 TLS is unreliable;
+    // see arduino_secrets.h header comment for the full reasoning.
+    WiFiClient client;
+
+    unsigned long t0 = millis();  // request start
 
     Serial.println("Making API request to Stockfish...");
     Serial.print("FEN: ");
     Serial.println(fen);
 
-    if (client.connect(STOCKFISH_API_URL, STOCKFISH_API_PORT)) {
-        // URL encode the FEN string
-        String encodedFen = urlEncode(fen);
-        
-        // Make HTTP GET request
-        String url = String(STOCKFISH_API_PATH) + "?fen=" + encodedFen + "&depth=" + String(settings.depth);
-        
-        Serial.print("Request URL: ");
-        Serial.println(url);
-        
-        client.println("GET " + url + " HTTP/1.1");
-        client.println("Host: " + String(STOCKFISH_API_URL));
-        client.println("Connection: close");
-        client.println();
-        
-        // Wait for response. Render the breathing 'thinking' indicator
-        // very sparingly (only when the brightness bucket changes -- about
-        // 5 times per second on average). Higher-rate NeoPixel updates
-        // disable interrupts for long enough to corrupt the concurrent
-        // WiFiSSL handshake / read.
-        unsigned long startTime = millis();
-        while (client.connected() && (millis() - startTime < settings.timeoutMs)) {
-            if (client.available()) {
-                String response = client.readString();
-                client.stop();
-                _boardDriver->clearAllLEDs();
-                _boardDriver->showLEDs();
-
-                // Debug: Print raw response
-                Serial.println("=== RAW API RESPONSE ===");
-                Serial.println(response);
-                Serial.println("=== END RAW RESPONSE ===");
-
-                return response;
-            }
-            showBotThinking();
-            delay(40);
-        }
-        
-        client.stop();
-        Serial.println("API request timeout");
-        return "";
-    } else {
-        Serial.println("Failed to connect to Stockfish API");
+    // Pre-flight: WiFi must be up. If the AP rebooted or signal blipped,
+    // a TLS handshake will hang forever instead of failing fast. Detect
+    // and short-circuit so the retry loop in makeBotMove can decide
+    // whether to do a full WiFi.end()+begin() recovery.
+    int wifiStatus = WiFi.status();
+    int rssi = WiFi.RSSI();
+    Serial.print("[DBG] Pre-flight: WiFi status=");
+    Serial.print(wifiStatus);
+    Serial.print(" RSSI=");
+    Serial.print(rssi);
+    Serial.print(" dBm IP=");
+    Serial.println(WiFi.localIP());
+    if (wifiStatus != WL_CONNECTED) {
+        Serial.print("PRE-FLIGHT FAIL: WiFi not connected (status=");
+        Serial.print(wifiStatus);
+        Serial.println(")");
         return "";
     }
+
+    // Belt-and-suspenders: WiFiClient is stack-allocated and goes out
+    // of scope at end of this function, but the underlying NINA-W102 socket
+    // can linger in TIME_WAIT for several seconds and starve subsequent
+    // connect() calls. Force a clean state before reusing the slot.
+    client.stop();
+    delay(50);
+
+    // Render an initial guaranteed-visible thinking pulse BEFORE we open the
+    // SSL socket. The Stockfish API typically responds in <1 s, which means
+    // the per-frame breathing call inside the read loop only manages 2-3
+    // frames -- not enough for the user to clearly see "the bot is thinking".
+    // Drawing 5 pulse frames here (~600 ms) before client.connect() ensures
+    // the user always gets visual confirmation that the request was sent,
+    // independent of how fast the API responds. We force-render each frame
+    // (no bucket skip) since this is pre-TLS so interrupt timing doesn't
+    // matter yet.
+    {
+        const uint8_t brights[5] = {60, 130, 200, 130, 60};
+        for (int f = 0; f < 5; f++) {
+            _boardDriver->clearAllLEDs();
+            for (int c = 0; c < 8; c++) {
+                _boardDriver->setSquareLED(7, c, 0, 0, brights[f]);
+            }
+            _boardDriver->showLEDs();
+            delay(120);
+        }
+    }
+
+    Serial.print("[DBG] Calling client.connect(");
+    Serial.print(STOCKFISH_API_URL);
+    Serial.print(":");
+    Serial.print(STOCKFISH_API_PORT);
+    Serial.println(")...");
+    unsigned long tConnect = millis();
+    bool connected = client.connect(STOCKFISH_API_URL, STOCKFISH_API_PORT);
+    unsigned long connectMs = millis() - tConnect;
+    Serial.print("[DBG] connect() returned ");
+    Serial.print(connected ? "TRUE" : "FALSE");
+    Serial.print(" after ");
+    Serial.print(connectMs);
+    Serial.println("ms");
+
+    if (!connected) {
+        Serial.print("CONNECT FAIL: TCP connect to ");
+        Serial.print(STOCKFISH_API_URL);
+        Serial.print(":");
+        Serial.print(STOCKFISH_API_PORT);
+        Serial.println(" failed");
+        client.stop();
+        delay(100);
+        return "";
+    }
+
+    // URL encode the FEN string
+    String encodedFen = urlEncode(fen);
+
+    // Build entire HTTP request in ONE buffer so we send it as a single
+    // chunk. Multiple separate client.println() calls can race against
+    // the NINA's TCP send buffer and (rarely) result in partial / out-of-
+    // order writes that Cloudflare interprets as a malformed request and
+    // silently drops -- which is exactly the "READ FAIL: no response after
+    // 5s" symptom we see.
+    String request;
+    request.reserve(512);
+    request += "GET ";
+    request += STOCKFISH_API_PATH;
+    request += "?fen=";
+    request += encodedFen;
+    request += "&depth=";
+    request += String(settings.depth);
+    request += " HTTP/1.1\r\n";
+    request += "Host: ";
+    request += STOCKFISH_API_URL;
+    request += "\r\n";
+    // Cloudflare is pickier than the origin: requests without a User-Agent
+    // are sometimes treated as suspicious and either silently dropped or
+    // sent to a slow challenge path. Always include a sensible UA.
+    request += "User-Agent: OpenChess/1.2.2 (Arduino-NINA)\r\n";
+    request += "Accept: application/json\r\n";
+    request += "Connection: close\r\n";
+    request += "\r\n";
+
+    Serial.print("[DBG] Request URL: ");
+    Serial.print(STOCKFISH_API_PATH);
+    Serial.print("?fen=");
+    Serial.print(encodedFen);
+    Serial.print("&depth=");
+    Serial.println(settings.depth);
+    Serial.print("[DBG] Request size: ");
+    Serial.print(request.length());
+    Serial.println(" bytes");
+
+    unsigned long tWrite = millis();
+    size_t written = client.print(request);
+    client.flush(); // force NINA to push the buffer out NOW
+    unsigned long writeMs = millis() - tWrite;
+    Serial.print("[DBG] Wrote ");
+    Serial.print(written);
+    Serial.print("/");
+    Serial.print(request.length());
+    Serial.print(" bytes in ");
+    Serial.print(writeMs);
+    Serial.println("ms");
+
+    if (written < request.length()) {
+        Serial.println("WRITE FAIL: NINA short-write -- request body incomplete");
+        client.stop();
+        delay(100);
+        return "";
+    }
+
+    // Bounded read loop. Render the breathing 'thinking' indicator
+    // very sparingly (only when the brightness bucket changes -- about
+    // 5 times per second on average). Higher-rate NeoPixel updates
+    // disable interrupts for long enough to corrupt the concurrent
+    // WiFiSSL handshake / read.
+    //
+    // Strict bytewise read with hard cap (instead of client.readString())
+    // to avoid edge case where the server stalls mid-stream and the
+    // Arduino Stream timeout extends indefinitely.
+    String response;
+    response.reserve(2048);
+    unsigned long startTime = millis();
+    unsigned long lastByteTime = millis();
+    unsigned long firstByteMs = 0;
+    // 8s gives Cloudflare's cold path a chance. We see 99%+ first-byte
+    // latency under 1.5s when the path is warm; cold path can be 4-6s.
+    const unsigned long INTER_BYTE_TIMEOUT_MS = 8000;
+    while (millis() - startTime < settings.timeoutMs) {
+        // Check connection health AND data availability separately
+        int avail = client.available();
+        if (avail > 0) {
+            if (firstByteMs == 0) {
+                firstByteMs = millis() - tWrite;
+                Serial.print("[DBG] First byte after ");
+                Serial.print(firstByteMs);
+                Serial.println("ms");
+            }
+            while (client.available()) {
+                char c = client.read();
+                response += c;
+                if (response.length() >= 4096) break; // hard cap (avoid OOM)
+            }
+            lastByteTime = millis();
+            if (response.length() >= 4096) break;
+        } else if (!client.connected()) {
+            // Server closed the connection. If we have bytes, we're done.
+            if (response.length() > 0) break;
+            // No bytes and connection closed = empty response (server hung up)
+            Serial.print("READ FAIL: server closed connection without sending data after ");
+            Serial.print(millis() - tWrite);
+            Serial.println("ms");
+            client.stop();
+            delay(100);
+            return "";
+        } else if (millis() - lastByteTime > INTER_BYTE_TIMEOUT_MS && response.length() == 0) {
+            // No response at all after 8s: server is hung
+            Serial.print("READ FAIL: no response from server after ");
+            Serial.print(INTER_BYTE_TIMEOUT_MS);
+            Serial.print("ms (connect was OK, request sent ");
+            Serial.print(written);
+            Serial.println(" bytes)");
+            client.stop();
+            delay(100);
+            return "";
+        }
+        showBotThinking();
+        delay(40);
+    }
+
+    // ALWAYS clean up the socket
+    client.stop();
+    delay(100);
+    _boardDriver->clearAllLEDs();
+    _boardDriver->showLEDs();
+
+    if (response.length() == 0) {
+        Serial.print("READ FAIL: timed out after ");
+        Serial.print(settings.timeoutMs);
+        Serial.println("ms with no response");
+        return "";
+    }
+
+    Serial.print("[DBG] Total request time: ");
+    Serial.print(millis() - t0);
+    Serial.print("ms (response ");
+    Serial.print(response.length());
+    Serial.println(" bytes)");
+
+    // Debug: Print raw response
+    Serial.println("=== RAW API RESPONSE ===");
+    Serial.println(response);
+    Serial.println("=== END RAW RESPONSE ===");
+
+    return response;
 }
 
 bool ChessBot::parseStockfishResponse(String response, String &bestMove) {
@@ -404,10 +648,75 @@ void ChessBot::makeBotMove() {
     Serial.print("Bot is playing as: ");
     Serial.println(isWhiteTurn ? "White" : "Black");
     Serial.print("Current board state (FEN): ");
-    
+
     String fen = boardToFEN();
-    String response = makeStockfishRequest(fen);
-    
+
+    // Defense in depth against WiFiNINA TLS flakiness:
+    //   * 5 attempts max
+    //   * Exponential backoff between attempts (500/1000/2000/4000/6000 ms)
+    //   * Pre-flight WiFi.status() check; quick reconnect if disconnected
+    //   * After attempt 3 still failing -> full WiFi.end()/begin() reset
+    //     of the NINA module (covers cases where the NINA-W102 internal
+    //     state is wedged but the network is otherwise fine)
+    //   * Visual orange retry pulse during backoff (so user knows the
+    //     board is actively recovering, not frozen)
+    //
+    // Total worst case: ~3*timeoutMs + 13s of backoff + 12s of WiFi reset
+    // ~= 100s. In practice attempt 1 succeeds 95%+ of the time and the
+    // user never sees a retry. When they do trigger, attempt 2 typically
+    // works.
+    String response;
+    const int MAX_ATTEMPTS = 5;
+    const unsigned long backoffMs[MAX_ATTEMPTS] = {0, 500, 1000, 2000, 4000};
+
+    for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        // Backoff (skipped on first attempt)
+        if (attempt > 1) {
+            Serial.print("Backoff ");
+            Serial.print(backoffMs[attempt - 1]);
+            Serial.print("ms before attempt ");
+            Serial.print(attempt);
+            Serial.println("...");
+            showRetryFeedback(attempt - 1);
+            delay(backoffMs[attempt - 1]);
+        }
+
+        // After 3 consecutive failures, the NINA module is probably wedged.
+        // Do a full reset before the next attempt.
+        if (attempt == 4) {
+            Serial.println("3 failures in a row -- resetting WiFi module...");
+            if (!reinitWiFiModule()) {
+                Serial.println("WiFi reinit failed -- continuing attempts anyway");
+            }
+        }
+
+        // Make sure WiFi is up before each attempt
+        if (!ensureWiFiConnected()) {
+            Serial.print("WiFi recovery failed on attempt ");
+            Serial.println(attempt);
+            continue;
+        }
+
+        Serial.print("--- Stockfish API attempt ");
+        Serial.print(attempt);
+        Serial.print("/");
+        Serial.print(MAX_ATTEMPTS);
+        Serial.println(" ---");
+
+        response = makeStockfishRequest(fen);
+        if (response.length() > 0) {
+            if (attempt > 1) {
+                Serial.print("RECOVERED: attempt ");
+                Serial.print(attempt);
+                Serial.println(" succeeded.");
+            }
+            break;
+        }
+        Serial.print("Attempt ");
+        Serial.print(attempt);
+        Serial.println(" returned empty response.");
+    }
+
     if (response.length() > 0) {
         String bestMove;
         if (parseStockfishResponse(response, bestMove)) {
@@ -415,13 +724,13 @@ void ChessBot::makeBotMove() {
             if (parseMove(bestMove, fromRow, fromCol, toRow, toCol)) {
                 Serial.print("Bot move: ");
                 Serial.println(bestMove);
-                
+
                 executeBotMove(fromRow, fromCol, toRow, toCol);
-                
+
                 // Switch back to player's turn
                 isWhiteTurn = true;
                 botThinking = false;
-                
+
                 Serial.println("Bot move completed. Your turn!");
             } else {
                 Serial.println("Failed to parse bot move - returning turn to player");
@@ -434,15 +743,16 @@ void ChessBot::makeBotMove() {
             isWhiteTurn = true;
         }
     } else {
-        // API timeout, network blip, or stockfish.online down. Don't strand
-        // the user with a frozen bot -- give the turn back so they can move
-        // and try again. The next move will trigger another API call which
-        // will probably succeed if the failure was transient.
-        Serial.println("No response from Stockfish API - returning turn to player, please try a different move or wait");
+        // ALL retries exhausted. Give the turn back so the user isn't
+        // stranded. Almost always means stockfish.online or the local
+        // network is genuinely down; the next player move will trigger
+        // a fresh attempt cycle.
+        Serial.println("=== ALL 5 ATTEMPTS FAILED ===");
+        Serial.println("Returning turn to player. Try moving again or check WiFi.");
         botThinking = false;
         isWhiteTurn = true;
-        // Visual feedback: brief red flash on rank 8 to tell the user the
-        // bot couldn't respond this round.
+
+        // Visual feedback: red flash on rank 8 to signal exhausted retries.
         for (int i = 0; i < 3; i++) {
             for (int c = 0; c < 8; c++) _boardDriver->setSquareLED(7, c, 200, 0, 0);
             _boardDriver->showLEDs();

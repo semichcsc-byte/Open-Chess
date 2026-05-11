@@ -6,7 +6,9 @@
 #include "stockfish_settings.h"
 #include "arduino_secrets.h"
 #include <WiFiNINA.h>
-#include <WiFiSSLClient.h>
+// We talk to the Cloudflare Worker proxy over plain HTTP because the NINA-W102
+// TLS stack can't reliably handshake with Cloudflare-fronted endpoints.
+// WiFiClient (no SSL) is rock-solid on the same module.
 
 class ChessBot {
 private:
@@ -41,8 +43,11 @@ private:
     
     // WiFi and API
     bool connectToWiFi();
+    bool ensureWiFiConnected();   // quick check + 1-attempt reconnect (~8s)
+    bool reinitWiFiModule();      // full WiFi.end()+begin() recovery (~12s)
     String makeStockfishRequest(String fen);
     bool parseStockfishResponse(String response, String &bestMove);
+    void showRetryFeedback(int attempt); // orange pulse during backoff
     
     // Move handling
     bool parseMove(String move, int &fromRow, int &fromCol, int &toRow, int &toCol);

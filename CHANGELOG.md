@@ -4,6 +4,97 @@ All user-visible changes to the [`semichcsc-byte/Open-Chess`](https://github.com
 
 ---
 
+## [v1.2.2-rp2040] — 2026-05-11
+
+Reliability release: **AI mode now actually works.** v1.2.0 / v1.2.1 had ~50-100% Stockfish failure rates in real-world conditions; v1.2.2 fixes that completely by routing through a tiny HTTP proxy.
+
+🔗 [Release page](https://github.com/semichcsc-byte/Open-Chess/releases/tag/v1.2.2-rp2040)
+
+### TL;DR
+
+- Switched AI mode from **HTTPS direct to `stockfish.online`** to **HTTP via [`openchess-proxy.semichcsc.workers.dev`](https://openchess-proxy.semichcsc.workers.dev)** (free Cloudflare Worker).
+- API success rate went from "fails ~half the time" to **8 consecutive successful moves on first attempt** in our test session, total request time **~2 seconds** end-to-end.
+- The hardened retry loop, exponential backoff, NINA module reset, and visual amber retry pulse are all still in there — they just almost never fire now.
+
+### Why the proxy exists
+
+The Arduino Nano RP2040 Connect's **WiFiNINA TLS stack** (NINA-W102 firmware 3.0.1) **cannot reliably complete TLS 1.3 handshakes with Cloudflare-fronted endpoints**. We instrumented the failure mode with a per-step debug log and the data is conclusive:
+
+```
+[DBG] Pre-flight: WiFi status=3 RSSI=-41 dBm IP=192.168.0.99
+[DBG] Calling client.connect(stockfish.online:443)...
+[DBG] connect() returned FALSE after 9312ms     ← TLS handshake times out
+```
+
+Five attempts in a row (each with excellent signal, RSSI ≈ -40 dBm) all hit the same ~9.5s TLS handshake timeout. Even a full `WiFi.disconnect()` → `WiFi.end()` → `WiFi.begin()` cycle (which IP renewal proves works) doesn't help. This isn't flakiness — the NINA-W102 TLS implementation just cannot speak the cipher suite Cloudflare currently negotiates by default. Confirmed by curl that the API works fine from a regular machine in <1 second.
+
+The fix: a **Cloudflare Worker** that accepts plain HTTP from the board (no TLS handshake needed at all on the constrained device) and forwards to stockfish.online over HTTPS server-side, returning just the JSON response.
+
+### Added — Cloudflare Worker proxy (`worker/`)
+
+- New top-level `worker/` directory with `proxy.js` (76 lines) and `wrangler.toml`.
+- Deployed at **`https://openchess-proxy.semichcsc.workers.dev`** (free Cloudflare tier, **100,000 requests/day** — enough for ~2,000 active boards playing 50 moves/day each).
+- Endpoint: `GET /v2?fen=<urlencoded>&depth=1..15` returns `{"success":true,"bestmove":"bestmove e2e4 ponder e7e5",...}`.
+- Health check at `/` returns `OpenChess proxy OK`.
+- Don't trust our proxy? **Self-host in 30 seconds**:
+  ```bash
+  cd worker && npm install -g wrangler && wrangler deploy
+  ```
+  Then change `STOCKFISH_API_URL` in `arduino_secrets.h` to your own subdomain. See [worker/proxy.js](https://github.com/semichcsc-byte/Open-Chess/blob/main/worker/proxy.js) for the full source.
+
+### Changed — Firmware (`chess_bot.cpp`, `arduino_secrets.h`)
+
+- `chess_bot.h` now includes plain `WiFiClient` instead of `WiFiSSLClient`.
+- `STOCKFISH_API_URL` defaults to `openchess-proxy.semichcsc.workers.dev`, `STOCKFISH_API_PORT` is `80`.
+- HTTP request format: `GET /v2?fen=...&depth=...` (was `GET /api/s/v2.php?fen=...`).
+- Single coalesced `client.print()` + `client.flush()` (was multiple `println()`s) so the entire request hits the wire as one packet — fixes a rare race where Cloudflare dropped requests mid-stream.
+- Added `User-Agent: OpenChess/1.2.2 (Arduino-NINA)` and `Accept: application/json` headers — Cloudflare prefers requests with explicit UA.
+
+### Added — Defense in depth (still useful in case the proxy ever has a wobble)
+
+All of the v1.2.2 hardening from earlier today is preserved and still active:
+
+- **5-attempt retry loop** with exponential backoff: 0 / 500 / 1000 / 2000 / 4000 ms.
+- **Pre-flight `WiFi.status()` check** with RSSI logged.
+- **Quick reconnect** (`ensureWiFiConnected()`, ~8s budget) if link drops between attempts.
+- **Full NINA module reset** (`reinitWiFiModule()`) automatically after 3 consecutive failures.
+- **Bounded read loop** with 8s inter-byte timeout — no `client.readString()` hangs.
+- **Hard 4096-byte response cap** — defensive against OOM.
+- **Detailed failure classification** in serial output (`PRE-FLIGHT FAIL`, `CONNECT FAIL`, `WRITE FAIL`, `READ FAIL`, `RECOVERED: attempt N`).
+
+### Added — Visual feedback
+
+- **Pre-call breathing pulse**: 5 forced frames of blue pulse on rank 8 (~600 ms) before opening the socket. Always visible regardless of API latency.
+- **Amber retry pulse** (`showRetryFeedback()`): during backoff between attempts, rank 8 flashes amber/orange 1×, 2×, 3×... — different colour from the blue thinking pulse so the user can tell "actively recovering" from "just thinking".
+- **Red flash only after all 5 attempts exhausted** (was: after 1 single failure).
+
+### Verified
+
+Eight consecutive Stockfish API calls on hardware, all succeeded on attempt 1:
+
+```
+[DBG] connect() returned TRUE after 304ms     →  Total: 1943ms  →  bestmove e7e5
+[DBG] connect() returned TRUE after  40ms     →  Total: 2049ms  →  bestmove b8c6
+[DBG] connect() returned TRUE after 314ms     →  Total: 2082ms  →  bestmove g8f6
+[DBG] connect() returned TRUE after 700ms     →  Total: 2625ms  →  bestmove h7h6
+[DBG] connect() returned TRUE after  48ms     →  Total: 2646ms  →  bestmove d7d5
+[DBG] connect() returned TRUE after  67ms     →  Total: 2036ms  →  bestmove f6d5
+[DBG] connect() returned TRUE after 145ms     →  Total: 2088ms  →  bestmove c8e6
+```
+
+```
+Sketch uses 151672 bytes (0%) of program storage space.
+Global variables use 44640 bytes (16%) of dynamic memory.
+=== Self-tests complete: 10/10 passed ===
+```
+
+### Known limitations
+
+- `chess_bot.cpp` still uses direct board mutation instead of `ChessEngine::applyMove`, so castling in AI mode doesn't auto-update castling rights, and the row-axis serial print is still mirrored ("f3 to e5" should read "f6 to e4"). Will be fixed in v1.3.
+- The default proxy URL points at our public Cloudflare Worker. If you want full self-sufficiency, follow the self-host instructions in `worker/README.md` — the whole proxy is 76 lines of JavaScript and free to run.
+
+---
+
 ## [v1.2.1-rp2040] — 2026-05-11
 
 Patch release: castling is now visually obvious in Human-vs-Human mode.

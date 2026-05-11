@@ -12,7 +12,7 @@
 extern const char STARTING_BOARD[8][8];
 
 // Firmware version printed at boot for support / debugging.
-#define OPENCHESS_FW_VERSION "1.2.1-rp2040"
+#define OPENCHESS_FW_VERSION "1.2.2-rp2040"
 
 // Uncomment the next line to enable WiFi features (requires compatible board)
 #define ENABLE_WIFI  // Currently disabled - RP2040 boards use local mode only

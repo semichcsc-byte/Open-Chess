@@ -1,0 +1,11 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "openchess-proxy"
+main = "proxy.js"
+compatibility_date = "2026-05-01"
+
+# Free-tier defaults are fine: 100,000 requests/day, no minimum.
+# No KV / R2 / D1 needed -- this is a stateless HTTP proxy.
+
+# Workers route the project at:
+#   https://openchess-proxy.<your-subdomain>.workers.dev
+# (You can also bind a custom domain if you have one.)
