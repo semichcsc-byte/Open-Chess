@@ -4,6 +4,24 @@ All user-visible changes to the [`semichcsc-byte/Open-Chess`](https://github.com
 
 ---
 
+## [v1.4.1-rp2040] — 2026-06-11
+
+### Fixed
+
+- **Checkmate / draw detection in AI mode.** Human-vs-AI never checked for game
+  end — if the bot mated you (or you mated the bot) the board just kept asking
+  for another move forever. AI mode now evaluates the position after every move
+  (player's and bot's), announces checkmate / stalemate / 50-move / insufficient
+  material, blinks the king on check, and stops the game.
+
+### Changed
+
+- **Endless checkmate fireworks.** On checkmate the board now loops the firework
+  animation continuously until someone lifts a piece, instead of a single brief
+  burst — in both Human-vs-Human and Human-vs-AI.
+
+---
+
 ## [v1.4.0-rp2040] — 2026-06-11
 
 ### Added

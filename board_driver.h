@@ -71,6 +71,11 @@ public:
     // idle; it only repaints when the brightness step changes, so it is
     // cheap and flicker-free. Pass the row to light (0 = rank 1, 7 = rank 8).
     void breatheRow(int row, uint8_t r, uint8_t g, uint8_t b, uint8_t w = 0);
+
+    // Loop the firework animation forever until the player lifts any piece
+    // (a sensor goes from occupied to empty). Used for the checkmate
+    // celebration. Blocks until a piece is lifted.
+    void celebrateUntilLifted();
     
     // Setup Functions
     bool checkInitialBoard(const char initialBoard[8][8]);

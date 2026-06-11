@@ -13,7 +13,7 @@
 extern const char STARTING_BOARD[8][8];
 
 // Firmware version printed at boot for support / debugging.
-#define OPENCHESS_FW_VERSION "1.4.0-rp2040"
+#define OPENCHESS_FW_VERSION "1.4.1-rp2040"
 
 // Set to 1 to print verbose DEBUG diagnostics on the serial monitor.
 // 0 keeps the serial output clean: just the banner, game events, and

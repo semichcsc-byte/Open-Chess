@@ -172,6 +172,34 @@ void BoardDriver::breatheRow(int row, uint8_t r, uint8_t g, uint8_t b, uint8_t w
     showLEDs();
 }
 
+void BoardDriver::celebrateUntilLifted() {
+    // Snapshot which squares currently have a piece. We keep firing fireworks
+    // until any one of them is lifted (occupied -> empty), then stop.
+    readSensors();
+    bool occupied[8][8];
+    for (int r = 0; r < 8; r++)
+        for (int c = 0; c < 8; c++)
+            occupied[r][c] = getSensorState(r, c);
+
+    while (true) {
+        fireworkAnimation(); // one ~couple-second burst
+
+        // Between bursts, poll the sensors a few times so we react quickly
+        // to a lifted piece without it having to be lifted during a burst.
+        for (int i = 0; i < 10; i++) {
+            readSensors();
+            for (int r = 0; r < 8; r++)
+                for (int c = 0; c < 8; c++)
+                    if (occupied[r][c] && !getSensorState(r, c)) {
+                        clearAllLEDs();
+                        showLEDs();
+                        return; // a piece was lifted -> stop celebrating
+                    }
+            delay(50);
+        }
+    }
+}
+
 void BoardDriver::fireworkAnimation() {
     float centerX = 3.5;
     float centerY = 3.5;

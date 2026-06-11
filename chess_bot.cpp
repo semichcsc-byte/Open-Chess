@@ -18,6 +18,7 @@ ChessBot::ChessBot(BoardDriver* boardDriver, ChessEngine* chessEngine, BotDiffic
     gameStarted = false;
     botThinking = false;
     wifiConnected = false;
+    gameOver = false;
 }
 
 void ChessBot::begin() {
@@ -92,6 +93,11 @@ void ChessBot::update() {
     
     if (!gameStarted) {
         return; // Waiting for initial setup
+    }
+
+    if (gameOver) {
+        delay(500);
+        return; // Game finished - wait for reset gesture (re-place all pieces)
     }
     
     if (botThinking) {
@@ -243,6 +249,13 @@ void ChessBot::update() {
                             // If power is lost during "thinking", the resume
                             // path will see it's the bot's turn and re-request.
                             persistenceSaveGame(2, (uint8_t)difficulty, 'b', board, state);
+
+                            // Did your move end the game (you checkmating the
+                            // bot, or a stalemate)? If so, don't ask the bot.
+                            if (checkGameEnd('b')) {
+                                _boardDriver->updateSensorPrev();
+                                return;
+                            }
 
                             Serial.println("Player move completed. Bot thinking...");
                             
@@ -775,6 +788,10 @@ void ChessBot::makeBotMove() {
 
                 // Persist: it's now the player's turn (white).
                 persistenceSaveGame(2, (uint8_t)difficulty, 'w', board, state);
+
+                // Did the bot's move end the game (checkmate/stalemate/draw)
+                // or put you in check?
+                checkGameEnd('w');
             } else {
                 Serial.println("Failed to parse bot move - returning turn to player");
                 botThinking = false;
@@ -996,6 +1013,64 @@ void ChessBot::executeBotMove(int fromRow, int fromCol, int toRow, int toCol) {
     Serial.println("Bot move completed. Your turn!");
 }
 
+bool ChessBot::checkGameEnd(char sideToMove) {
+    GameResult result = _chessEngine->getGameResult(board, &state, sideToMove);
+
+    if (result == GAME_ONGOING) {
+        // Not over - but announce check so the player knows.
+        if (_chessEngine->isInCheck(board, sideToMove)) {
+            Serial.print(sideToMove == 'w' ? "White" : "Black");
+            Serial.println(" is in CHECK!");
+            char target = (sideToMove == 'w') ? 'K' : 'k';
+            int kr = -1, kc = -1;
+            for (int r = 0; r < 8; r++)
+                for (int c = 0; c < 8; c++)
+                    if (board[r][c] == target) { kr = r; kc = c; }
+            if (kr >= 0) {
+                for (int b = 0; b < 3; b++) {
+                    _boardDriver->setSquareLED(kr, kc, 255, 0, 0, 0);
+                    _boardDriver->showLEDs(); delay(150);
+                    _boardDriver->setSquareLED(kr, kc, 0, 0, 0, 0);
+                    _boardDriver->showLEDs(); delay(150);
+                }
+            }
+        }
+        return false;
+    }
+
+    // Game over - announce and stop.
+    _boardDriver->clearAllLEDs();
+    switch (result) {
+        case GAME_CHECKMATE_WHITE_WINS:
+            Serial.println("CHECKMATE - WHITE WINS (you beat the bot!)");
+            Serial.println("Fireworks until you lift a piece...");
+            _boardDriver->celebrateUntilLifted();
+            break;
+        case GAME_CHECKMATE_BLACK_WINS:
+            Serial.println("CHECKMATE - BLACK WINS (the bot got you)");
+            Serial.println("Fireworks until you lift a piece...");
+            _boardDriver->celebrateUntilLifted();
+            break;
+        case GAME_STALEMATE:
+            Serial.println("STALEMATE - Draw");
+            _boardDriver->fireworkAnimation();
+            break;
+        case GAME_DRAW_50_MOVE:
+            Serial.println("DRAW - 50-move rule");
+            _boardDriver->fireworkAnimation();
+            break;
+        case GAME_DRAW_INSUFFICIENT_MATERIAL:
+            Serial.println("DRAW - Insufficient material");
+            _boardDriver->fireworkAnimation();
+            break;
+        default: break;
+    }
+    Serial.println("Game over. Re-place all 32 pieces in the starting position to play again.");
+    gameOver = true;
+    persistenceClear(); // finished game - nothing to resume
+    return true;
+}
+
 void ChessBot::updateCastlingRights(char piece, int fromRow, int fromCol) {
     // A king move forfeits both of that side's castling rights; a rook move
     // off its home square forfeits that side's right. This mirrors the rules
@@ -1071,6 +1146,7 @@ void ChessBot::waitForBoardSetup() {
     Serial.println("Board setup complete! Game starting...");
     _boardDriver->fireworkAnimation();
     gameStarted = true;
+    gameOver = false;
 
     // Persist the fresh game (player's turn) so an immediate power-off resumes.
     isWhiteTurn = true;
@@ -1090,6 +1166,7 @@ bool ChessBot::resumeFrom(const SavedGame& g) {
     isWhiteTurn = (g.turnColor == 'w');
     setDifficulty((BotDifficulty)g.difficulty);
     botThinking = false;
+    gameOver = false;
 
     Serial.println("Resuming Human-vs-AI game...");
     _boardDriver->clearAllLEDs();

@@ -392,22 +392,13 @@ void ChessMoves::announceGameResult(GameResult r) {
     switch (r) {
         case GAME_CHECKMATE_WHITE_WINS:
             Serial.println("CHECKMATE - WHITE WINS");
-            // Light all white squares
-            for (int rr = 0; rr < 8; rr++)
-                for (int cc = 0; cc < 8; cc++)
-                    boardDriver->setSquareLED(rr, cc, 0, 0, 0, 255);
-            boardDriver->showLEDs();
+            Serial.println("Fireworks until a piece is lifted...");
+            boardDriver->celebrateUntilLifted();
             break;
         case GAME_CHECKMATE_BLACK_WINS:
             Serial.println("CHECKMATE - BLACK WINS");
-            // Pulse red
-            for (int p = 0; p < 3; p++) {
-                for (int rr = 0; rr < 8; rr++)
-                    for (int cc = 0; cc < 8; cc++)
-                        boardDriver->setSquareLED(rr, cc, 255, 0, 0, 0);
-                boardDriver->showLEDs(); delay(300);
-                boardDriver->clearAllLEDs(); delay(300);
-            }
+            Serial.println("Fireworks until a piece is lifted...");
+            boardDriver->celebrateUntilLifted();
             break;
         case GAME_STALEMATE:
             Serial.println("STALEMATE - Draw");

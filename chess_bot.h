@@ -37,6 +37,7 @@ private:
     bool gameStarted;
     bool botThinking;
     bool wifiConnected;
+    bool gameOver;
     
     // FEN notation handling
     String boardToFEN();
@@ -54,6 +55,11 @@ private:
     bool parseMove(String move, int &fromRow, int &fromCol, int &toRow, int &toCol);
     void executeBotMove(int fromRow, int fromCol, int toRow, int toCol);
     void updateCastlingRights(char piece, int fromRow, int fromCol);
+
+    // Check for checkmate / stalemate / draw after a move by `mover` ('w'/'b').
+    // Announces the result on the board + serial and sets gameOver. Returns
+    // true if the game ended.
+    bool checkGameEnd(char sideToMove);
     
     // URL encoding helper
     String urlEncode(String str);
