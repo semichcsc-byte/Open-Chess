@@ -4,6 +4,25 @@ All user-visible changes to the [`semichcsc-byte/Open-Chess`](https://github.com
 
 ---
 
+## [v1.4.0-rp2040] — 2026-06-11
+
+### Added
+
+- **Persistent games — resume across power-offs.** The board now saves the
+  in-progress game (board, side to move, castling rights, en-passant, halfmove
+  clock, and mode/difficulty) to a reserved 64 KB region of internal flash
+  after every move. On boot it **silently resumes** where you left off — no
+  resume menu, no "set up the pieces" prompt. Power off mid-game, come back
+  hours or days later, and just keep playing. In AI mode the board reconnects
+  to WiFi automatically on resume. The saved game stays active until you put
+  all 32 pieces back on their starting squares (the existing reset gesture),
+  which clears it. Works in both Human-vs-Human and Human-vs-AI.
+  - New module: `game_persistence.{h,cpp}` (mbed `TDBStore` over `FlashIAP`).
+  - Verified on hardware: full power-cycle mid-AI-game resumed to the correct
+    position and turn, and reconnected to WiFi.
+
+---
+
 ## [v1.3.0-rp2040] — 2026-06-11
 
 UX + AI-mode correctness release. Several issues only surface once you actually

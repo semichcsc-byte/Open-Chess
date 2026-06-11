@@ -5,6 +5,7 @@
 #include "chess_engine.h"
 #include "stockfish_settings.h"
 #include "arduino_secrets.h"
+#include "game_persistence.h"
 #include <WiFiNINA.h>
 // We talk to the Cloudflare Worker proxy over plain HTTP because the NINA-W102
 // TLS stack can't reliably handshake with Cloudflare-fronted endpoints.
@@ -75,6 +76,10 @@ public:
     void begin();
     void update();
     void setDifficulty(BotDifficulty diff);
+
+    // Resume a saved AI game: adopt board/state/turn, reconnect WiFi, and skip
+    // the piece-placement setup. Returns true if WiFi came up (bot playable).
+    bool resumeFrom(const SavedGame& g);
 };
 
 #endif

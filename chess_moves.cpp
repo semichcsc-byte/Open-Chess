@@ -33,6 +33,29 @@ void ChessMoves::begin() {
     Serial.println("Chess game ready to start!");
     boardDriver->fireworkAnimation();
 
+    // Persist the fresh game so an immediate power-off still resumes.
+    persistenceSaveGame(1, 0, turnColor, board, state);
+
+    boardDriver->readSensors();
+    boardDriver->updateSensorPrev();
+}
+
+// Resume a saved game: adopt board/state/turn and skip setup + fireworks.
+void ChessMoves::resumeFrom(const SavedGame& g) {
+    for (int r = 0; r < 8; r++)
+        for (int c = 0; c < 8; c++)
+            board[r][c] = g.board[r][c];
+    state.reset();
+    persistenceUnpackState(g, state);
+    turnColor = g.turnColor;
+    gameOver = false;
+
+    Serial.print("Resumed Human-vs-Human game, ");
+    Serial.print(turnColor == 'w' ? "White" : "Black");
+    Serial.println(" to move.");
+
+    boardDriver->clearAllLEDs();
+    boardDriver->showLEDs();
     boardDriver->readSensors();
     boardDriver->updateSensorPrev();
 }
@@ -248,11 +271,16 @@ void ChessMoves::update() {
             // Switch turn
             turnColor = (turnColor == 'w') ? 'b' : 'w';
 
+            // Persist the new position so the game survives a power cycle.
+            // (mode 1 = Human-vs-Human; difficulty unused here.)
+            persistenceSaveGame(1, 0, turnColor, board, state);
+
             // Game over?
             GameResult result = chessEngine->getGameResult(board, &state, turnColor);
             if (result != GAME_ONGOING) {
                 announceGameResult(result);
                 gameOver = true;
+                persistenceClear(); // game finished, nothing to resume
                 boardDriver->updateSensorPrev();
                 return;
             }

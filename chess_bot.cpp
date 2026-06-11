@@ -98,7 +98,17 @@ void ChessBot::update() {
         showBotThinking();
         return;
     }
-    
+
+    // Bot's turn but not yet computing. In normal play makeBotMove() is called
+    // inline right after the player moves, so this is reached only after a
+    // resume where the saved turn was the bot's (player already moved their
+    // piece physically before power-off) or a prior failure path. Drive it.
+    if (!isWhiteTurn) {
+        botThinking = true;
+        makeBotMove();
+        return;
+    }
+
     _boardDriver->readSensors();
     
     // Detect piece movements (player's turn - White pieces only)
@@ -228,7 +238,12 @@ void ChessBot::update() {
                             // Switch to bot's turn
                             isWhiteTurn = false;
                             botThinking = true;
-                            
+
+                            // Persist post-player-move position (bot to move).
+                            // If power is lost during "thinking", the resume
+                            // path will see it's the bot's turn and re-request.
+                            persistenceSaveGame(2, (uint8_t)difficulty, 'b', board, state);
+
                             Serial.println("Player move completed. Bot thinking...");
                             
                             // Start bot move calculation
@@ -757,6 +772,9 @@ void ChessBot::makeBotMove() {
                 botThinking = false;
 
                 Serial.println("Bot move completed. Your turn!");
+
+                // Persist: it's now the player's turn (white).
+                persistenceSaveGame(2, (uint8_t)difficulty, 'w', board, state);
             } else {
                 Serial.println("Failed to parse bot move - returning turn to player");
                 botThinking = false;
@@ -1053,9 +1071,54 @@ void ChessBot::waitForBoardSetup() {
     Serial.println("Board setup complete! Game starting...");
     _boardDriver->fireworkAnimation();
     gameStarted = true;
-    
+
+    // Persist the fresh game (player's turn) so an immediate power-off resumes.
+    isWhiteTurn = true;
+    persistenceSaveGame(2, (uint8_t)difficulty, 'w', board, state);
+
     // Show initial board state
     printCurrentBoard();
+}
+
+// Resume a saved AI game: adopt board/state/turn, reconnect WiFi, skip setup.
+bool ChessBot::resumeFrom(const SavedGame& g) {
+    for (int r = 0; r < 8; r++)
+        for (int c = 0; c < 8; c++)
+            board[r][c] = g.board[r][c];
+    state.reset();
+    persistenceUnpackState(g, state);
+    isWhiteTurn = (g.turnColor == 'w');
+    setDifficulty((BotDifficulty)g.difficulty);
+    botThinking = false;
+
+    Serial.println("Resuming Human-vs-AI game...");
+    _boardDriver->clearAllLEDs();
+    _boardDriver->showLEDs();
+
+    // AI mode needs the network. Reconnect before play can continue.
+    Serial.println("Reconnecting to WiFi to resume bot play...");
+    showConnectionStatus();
+    if (connectToWiFi()) {
+        wifiConnected = true;
+        gameStarted = true;
+        for (int i = 0; i < 3; i++) { // brief green confirm
+            for (int row = 0; row < 8; row++)
+                for (int col = 0; col < 8; col++)
+                    _boardDriver->setSquareLED(row, col, 0, 255, 0);
+            _boardDriver->showLEDs(); delay(150);
+            _boardDriver->clearAllLEDs(); _boardDriver->showLEDs(); delay(150);
+        }
+        Serial.print("Resumed. ");
+        Serial.println(isWhiteTurn ? "Your move." : "Bot to move.");
+        _boardDriver->readSensors();
+        _boardDriver->updateSensorPrev();
+        return true;
+    }
+
+    Serial.println("WiFi failed on resume - bot mode unavailable until reboot.");
+    wifiConnected = false;
+    gameStarted = true;
+    return false;
 }
 
 void ChessBot::processPlayerMove(int fromRow, int fromCol, int toRow, int toCol, char piece) {

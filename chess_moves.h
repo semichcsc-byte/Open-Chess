@@ -3,6 +3,7 @@
 
 #include "board_driver.h"
 #include "chess_engine.h"
+#include "game_persistence.h"
 
 // ---------------------------
 // Chess Game Mode Class
@@ -37,6 +38,10 @@ public:
     void update();
     bool isActive();
     void reset();
+
+    // Resume a previously-saved game: adopt the board/state/turn and skip the
+    // piece-placement setup (the physical pieces are already where they were).
+    void resumeFrom(const SavedGame& g);
 };
 
 #endif // CHESS_MOVES_H

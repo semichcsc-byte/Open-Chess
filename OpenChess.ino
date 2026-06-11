@@ -3,6 +3,7 @@
 #include "chess_moves.h"
 #include "sensor_test.h"
 #include "chess_bot.h"
+#include "game_persistence.h"
 
 #include <math.h>
 
@@ -12,7 +13,7 @@
 extern const char STARTING_BOARD[8][8];
 
 // Firmware version printed at boot for support / debugging.
-#define OPENCHESS_FW_VERSION "1.3.0-rp2040"
+#define OPENCHESS_FW_VERSION "1.4.0-rp2040"
 
 // Set to 1 to print verbose DEBUG diagnostics on the serial monitor.
 // 0 keeps the serial output clean: just the banner, game events, and
@@ -133,6 +134,25 @@ void setup() {
 #else
   DBGLN("DEBUG: Local mode only (WiFi disabled)");
 #endif
+
+  // Try to silently resume a saved game. It survives power-off and stays
+  // active until the player puts all 32 pieces back on the starting squares
+  // (the reset gesture in loop()). No resume menu, by design.
+  persistenceBegin();
+  SavedGame saved;
+  if (persistenceLoadGame(saved)) {
+    Serial.println("Saved game found - resuming where you left off.");
+    if (saved.mode == 2) {
+      currentMode = MODE_CHESS_BOT;
+      chessBot.resumeFrom(saved);
+    } else {
+      currentMode = MODE_CHESS_MOVES;
+      chessMoves.resumeFrom(saved);
+    }
+    modeInitialized = true; // skip the menu and piece-setup; resume directly
+    Serial.println("================================================");
+    return;
+  }
 
   // Show game selection interface
   showGameSelection();
@@ -274,6 +294,7 @@ void loop() {
           wasInResetPos = true;
         } else if (millis() - resetHoldStart > 1500) {
           Serial.println("Reset gesture: 32 pieces back in starting position for >1.5s -> back to menu");
+          persistenceClear(); // end the saved game; nothing to resume now
           currentMode = MODE_SELECTION;
           modeInitialized = false;
           modeChangeLogged = false;
