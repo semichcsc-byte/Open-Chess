@@ -104,6 +104,27 @@ void setup() {
   boardDriver.begin();
   DBGLN("DEBUG: Board driver initialized");
 
+  // Run the chess-engine self-tests before anything else. These are our
+  // regression net for the rules code; results print to serial and, on any
+  // failure, the whole board flashes red 5x so a broken build is impossible
+  // to miss.
+  int testFailures = chessEngine.runSelfTests();
+  if (testFailures > 0) {
+    Serial.print("WARNING: ");
+    Serial.print(testFailures);
+    Serial.println(" engine self-tests FAILED - re-flash a clean release!");
+    for (int i = 0; i < 5; i++) {
+      for (int r = 0; r < 8; r++)
+        for (int c = 0; c < 8; c++)
+          boardDriver.setSquareLED(r, c, 255, 0, 0, 0);
+      boardDriver.showLEDs();
+      delay(200);
+      boardDriver.clearAllLEDs();
+      boardDriver.showLEDs();
+      delay(200);
+    }
+  }
+
 #ifdef ENABLE_WIFI
   // Initialize WiFi Manager (AP for optional web selection; it is torn
   // down cleanly before station mode when AI mode connects to your router).

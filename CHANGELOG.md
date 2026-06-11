@@ -37,6 +37,10 @@ it much clearer whose turn it is.
 - **Mirrored rank notation** in AI-mode serial logs (`8 - row` → `row + 1`).
 - **Light bleed:** lifting a piece now clears the turn-indicator row before
   drawing legal-move dots, so the king's row no longer shows a wall of LEDs.
+- **Self-tests now actually run at boot.** `ChessEngine::runSelfTests()` was
+  documented as running on every boot but was never called from `setup()`. It
+  now runs before WiFi init, prints `PASS T1..T10`, and flashes the board red
+  5× on any failure — the documented regression net is back in place.
 
 ### Changed
 
