@@ -12,7 +12,19 @@
 extern const char STARTING_BOARD[8][8];
 
 // Firmware version printed at boot for support / debugging.
-#define OPENCHESS_FW_VERSION "1.2.2-rp2040"
+#define OPENCHESS_FW_VERSION "1.3.0-rp2040"
+
+// Set to 1 to print verbose DEBUG diagnostics on the serial monitor.
+// 0 keeps the serial output clean: just the banner, game events, and
+// useful play hints (no 10s "uptime" spam, no boot internals).
+#define DEBUG_VERBOSE 0
+#if DEBUG_VERBOSE
+  #define DBG(x)   Serial.print(x)
+  #define DBGLN(x) Serial.println(x)
+#else
+  #define DBG(x)
+  #define DBGLN(x)
+#endif
 
 // Uncomment the next line to enable WiFi features (requires compatible board)
 #define ENABLE_WIFI  // Currently disabled - RP2040 boards use local mode only
@@ -60,6 +72,7 @@ bool modeInitialized = false;
 void showGameSelection();
 void handleGameSelection();
 void initializeSelectedMode(GameMode mode);
+BotDifficulty askBotDifficulty();
 
 // ---------------------------
 // SETUP
@@ -85,73 +98,32 @@ void setup() {
   Serial.println(OPENCHESS_FW_VERSION);
   Serial.println("         Fork:    semichcsc-byte/Open-Chess");
   Serial.println("================================================");
-  Serial.println("DEBUG: Serial communication established");
-  Serial.print("DEBUG: Millis since boot: ");
-  Serial.println(millis());
-  
-  // Debug board type detection
-  Serial.println("DEBUG: Board type detection:");
-  #if defined(ARDUINO_SAMD_MKRWIFI1010)
-  Serial.println("  - Detected: ARDUINO_SAMD_MKRWIFI1010");
-  #elif defined(ARDUINO_SAMD_NANO_33_IOT)
-  Serial.println("  - Detected: ARDUINO_SAMD_NANO_33_IOT");
-  #elif defined(ARDUINO_NANO_RP2040_CONNECT)
-  Serial.println("  - Detected: ARDUINO_NANO_RP2040_CONNECT");
-  #else
-  Serial.println("  - Detected: Unknown/Other board type");
-  #endif
-  
-  // Check which mode is compiled
-#ifdef ENABLE_WIFI
-  Serial.println("DEBUG: Compiled with ENABLE_WIFI defined");
-#else
-  Serial.println("DEBUG: Compiled without ENABLE_WIFI (local mode only)");
-#endif
+  DBGLN("DEBUG: Serial communication established");
 
-  Serial.println("DEBUG: About to initialize board driver...");
   // Initialize board driver
   boardDriver.begin();
-  Serial.println("DEBUG: Board driver initialized successfully");
+  DBGLN("DEBUG: Board driver initialized");
 
 #ifdef ENABLE_WIFI
-  Serial.println();
-  Serial.println("=== WiFi Mode Enabled ===");
-  Serial.println("DEBUG: About to initialize WiFi Manager...");
-  Serial.println("DEBUG: This will attempt to create Access Point");
-  
-  // Initialize WiFi Manager
+  // Initialize WiFi Manager (AP for optional web selection; it is torn
+  // down cleanly before station mode when AI mode connects to your router).
   wifiManager.begin();
-  
-  Serial.println("DEBUG: WiFi Manager initialization completed");
-  Serial.println("If WiFi AP was created successfully, you should see:");
-  Serial.println("- Network name: OpenChessBoard");
-  Serial.println("- Password: chess123");
-  Serial.println("- Web interface: http://192.168.4.1");
-  Serial.println("Or place a piece on the board for local selection");
+  DBGLN("DEBUG: WiFi Manager initialized (AP: OpenChessBoard / chess123)");
 #else
-  Serial.println();
-  Serial.println("=== Local Mode Only ===");
-  Serial.println("WiFi features are disabled in this build");
-  Serial.println("To enable WiFi: Uncomment #define ENABLE_WIFI and recompile");
+  DBGLN("DEBUG: Local mode only (WiFi disabled)");
 #endif
-
-  Serial.println();
-  Serial.println("=== Game Selection Mode ===");
-  Serial.println("DEBUG: About to show game selection LEDs...");
 
   // Show game selection interface
   showGameSelection();
-  
-  Serial.println("DEBUG: Game selection LEDs should now be visible");
-  Serial.println("Four white LEDs should be lit in the center of the board:");
-  Serial.println("Position 1 (3,3): Chess Moves (Human vs Human)");
-  Serial.println("Position 2 (3,4): Chess Bot (Human vs AI)");
-  Serial.println("Position 3 (4,3): Game Mode 3 (Coming Soon)");
-  Serial.println("Position 4 (4,4): Sensor Test");
+
   Serial.println();
-  Serial.println("Place any chess piece on a white LED to select that mode");
-  Serial.println("================================================");
-  Serial.println("         Setup Complete - Entering Main Loop");
+  Serial.println("=== How to play ===");
+  Serial.println("1. Place all 32 pieces in the starting position.");
+  Serial.println("2. A rainbow burst confirms the board, then 2 menu LEDs light up:");
+  Serial.println("     D5 (left)  = Human vs Human  (white LED)");
+  Serial.println("     E4 (right) = Human vs AI      (blue LED)");
+  Serial.println("3. Lift any piece and place it on a lit square to choose.");
+  Serial.println("   AI mode then asks for difficulty on 4 lit centre squares.");
   Serial.println("================================================");
 }
 
@@ -163,15 +135,16 @@ void loop() {
   static bool firstLoop = true;
   
   if (firstLoop) {
-    Serial.println("DEBUG: Entered main loop - system is running");
+    DBGLN("DEBUG: Entered main loop - waiting for game setup");
     firstLoop = false;
   }
-  
-  // Print periodic status every 10 seconds
-  if (millis() - lastDebugPrint > 10000) {
-    Serial.print("DEBUG: Loop running, uptime: ");
+
+  // Optional heartbeat - only when DEBUG_VERBOSE is enabled, so the serial
+  // monitor stays quiet during normal play.
+  if (DEBUG_VERBOSE && millis() - lastDebugPrint > 10000) {
+    Serial.print("DEBUG: uptime ");
     Serial.print(millis() / 1000);
-    Serial.println(" seconds");
+    Serial.println("s");
     lastDebugPrint = millis();
   }
 
@@ -460,8 +433,8 @@ static void convergentExplosion() {
   // ---- Stage 4: triple pulse on the 2 final selector squares --------------
   for (int flash = 0; flash < 3; flash++) {
     boardDriver.clearAllLEDs();
-    boardDriver.setSquareLED(4, 3, 0, 0, 0, 255); // D5 = HvsH
-    boardDriver.setSquareLED(3, 4, 0, 0, 0, 255); // E4 = AI
+    boardDriver.setSquareLED(4, 3, 0, 0, 0, 255); // D5 = HvsH (white)
+    boardDriver.setSquareLED(3, 4, 0, 0, 255, 0); // E4 = AI (blue)
     boardDriver.showLEDs();
     delay(180);
     boardDriver.clearAllLEDs();
@@ -505,8 +478,8 @@ void handleGameSelection() {
   // selector. The mode's own waitForBoardSetup() will then resume once
   // the board is back in its proper starting position.
   boardDriver.clearAllLEDs();
-  boardDriver.setSquareLED(4, 3, 0, 0, 0, 255);  // D5 = HvsH
-  boardDriver.setSquareLED(3, 4, 0, 0, 0, 255);  // E4 = AI
+  boardDriver.setSquareLED(4, 3, 0, 0, 0, 255);  // D5 = HvsH (white)
+  boardDriver.setSquareLED(3, 4, 0, 0, 255, 0);  // E4 = AI (blue)
   boardDriver.showLEDs();
 
   // Check for piece placement on the 2 selector squares
@@ -533,6 +506,75 @@ void handleGameSelection() {
   delay(50);
 }
 
+// Ask the player to pick the AI strength before the bot connects to WiFi.
+// Four empty centre squares (rank 4: c4 d4 e4 f4) light up as buttons; the
+// player lifts any piece and places it on one. Returns the chosen difficulty.
+// Mirrors the look & feel of the promotion picker in chess_moves.cpp.
+BotDifficulty askBotDifficulty() {
+  const int dr = 3;                  // internal row for rank 4 (always empty at setup)
+  const int dcols[4] = {2, 3, 4, 5}; // files c, d, e, f
+  // Per-button colour: Easy=green, Medium=blue, Hard=amber, Expert=red.
+  const uint8_t cr[4] = {0,   0,   255, 255};
+  const uint8_t cg[4] = {255, 0,   120, 0};
+  const uint8_t cb[4] = {0,   255, 0,   0};
+
+  boardDriver.clearAllLEDs();
+  for (int i = 0; i < 4; i++) {
+    boardDriver.setSquareLED(dr, dcols[i], cr[i], cg[i], cb[i]);
+  }
+  boardDriver.showLEDs();
+
+  Serial.println("Choose AI difficulty - place a piece on a lit centre square:");
+  Serial.println("  c4=Easy(green)  d4=Medium(blue)  e4=Hard(amber)  f4=Expert(red)");
+
+  // Flush sensor state so only a NEW placement counts as a choice.
+  boardDriver.readSensors();
+  boardDriver.updateSensorPrev();
+
+  BotDifficulty chosen = BOT_MEDIUM;
+  int chosenIdx = 1;
+  bool picked = false;
+  while (!picked) {
+    boardDriver.readSensors();
+    for (int i = 0; i < 4; i++) {
+      if (boardDriver.getSensorState(dr, dcols[i]) &&
+          !boardDriver.getSensorPrev(dr, dcols[i])) {
+        chosen = (BotDifficulty)(BOT_EASY + i);
+        chosenIdx = i;
+        picked = true;
+        break;
+      }
+    }
+    boardDriver.updateSensorPrev();
+    delay(50);
+  }
+
+  // Confirm: blink the chosen square 3x in its own colour.
+  for (int f = 0; f < 3; f++) {
+    boardDriver.clearAllLEDs();
+    boardDriver.setSquareLED(dr, dcols[chosenIdx], cr[chosenIdx], cg[chosenIdx], cb[chosenIdx]);
+    boardDriver.showLEDs();
+    delay(150);
+    boardDriver.clearAllLEDs();
+    boardDriver.showLEDs();
+    delay(120);
+  }
+
+  // Wait for the selector piece to be lifted so it isn't mistaken for a move.
+  while (true) {
+    boardDriver.readSensors();
+    bool anyOn = false;
+    for (int i = 0; i < 4; i++) {
+      if (boardDriver.getSensorState(dr, dcols[i])) { anyOn = true; break; }
+    }
+    if (!anyOn) break;
+    delay(50);
+  }
+  boardDriver.clearAllLEDs();
+  boardDriver.showLEDs();
+  return chosen;
+}
+
 void initializeSelectedMode(GameMode mode) {
   switch (mode) {
     case MODE_CHESS_MOVES:
@@ -541,6 +583,7 @@ void initializeSelectedMode(GameMode mode) {
       break;
     case MODE_CHESS_BOT:
       Serial.println("Starting Chess Bot (Human vs AI)...");
+      chessBot.setDifficulty(askBotDifficulty());
       chessBot.begin();
       break;
     case MODE_SENSOR_TEST:

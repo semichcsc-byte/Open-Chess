@@ -52,6 +52,7 @@ private:
     // Move handling
     bool parseMove(String move, int &fromRow, int &fromCol, int &toRow, int &toCol);
     void executeBotMove(int fromRow, int fromCol, int toRow, int toCol);
+    void updateCastlingRights(char piece, int fromRow, int fromCol);
     
     // URL encoding helper
     String urlEncode(String str);

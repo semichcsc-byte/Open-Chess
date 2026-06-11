@@ -1,6 +1,20 @@
 #include "wifi_manager.h"
 #include <Arduino.h>
 
+// Verbose WiFi diagnostics. Set to 1 to restore the full step-by-step debug
+// log (module detection, status codes, AP info dump). Off by default so the
+// serial monitor stays clean during normal play.
+#ifndef WIFI_VERBOSE
+#define WIFI_VERBOSE 0
+#endif
+#if WIFI_VERBOSE
+  #define WLOG(...)   Serial.print(__VA_ARGS__)
+  #define WLOGLN(...) Serial.println(__VA_ARGS__)
+#else
+  #define WLOG(...)
+  #define WLOGLN(...)
+#endif
+
 WiFiManager::WiFiManager() : server(AP_PORT) {
     apMode = true;
     clientConnected = false;
@@ -12,58 +26,42 @@ WiFiManager::WiFiManager() : server(AP_PORT) {
 }
 
 void WiFiManager::begin() {
-    Serial.println("!!! WIFI MANAGER BEGIN FUNCTION CALLED !!!");
-    Serial.println("=== Starting OpenChess WiFi Manager ===");
-    Serial.println("Debug: WiFi Manager begin() called");
-    
-    // Check if WiFi is available
-    Serial.println("Debug: Checking WiFi module...");
-    
+    WLOGLN("=== Starting OpenChess WiFi Manager ===");
+
     // Try to get WiFi status - this often fails on incompatible boards
-    Serial.println("Debug: Attempting to get WiFi status...");
     int initialStatus = WiFi.status();
-    Serial.print("Debug: Initial WiFi status: ");
-    Serial.println(initialStatus);
-    
+    WLOG("Debug: Initial WiFi status: ");
+    WLOGLN(initialStatus);
+
     // Initialize WiFi module
-    Serial.println("Debug: Checking for WiFi module presence...");
     if (initialStatus == WL_NO_MODULE) {
-        Serial.println("ERROR: WiFi module not detected!");
-        Serial.println("Board type: Arduino Nano RP2040 - WiFi not supported with WiFiNINA");
-        Serial.println("This is expected behavior for RP2040 boards.");
-        Serial.println("Use physical board selectors for game mode selection.");
+        Serial.println("ERROR: WiFi module not detected - using physical board selectors only.");
         return;
     }
-    
-    Serial.println("Debug: WiFi module appears to be present");
-    
-    Serial.println("Debug: WiFi module detected");
-    
+
+    WLOGLN("Debug: WiFi module detected");
+
     // Check firmware version
     String fv = WiFi.firmwareVersion();
-    Serial.print("Debug: WiFi firmware version: ");
-    Serial.println(fv);
-    
+    WLOG("Debug: WiFi firmware version: ");
+    WLOGLN(fv);
+
     // Start Access Point
-    Serial.print("Debug: Creating Access Point with SSID: ");
-    Serial.println(AP_SSID);
-    Serial.print("Debug: Using password: ");
-    Serial.println(AP_PASSWORD);
-    
-    Serial.println("Debug: Calling WiFi.beginAP()...");
-    
+    WLOG("Debug: Creating Access Point with SSID: ");
+    WLOGLN(AP_SSID);
+
     // First, try without channel specification (like Arduino example)
-    Serial.println("Debug: Attempting AP creation without channel...");
     int status = WiFi.beginAP(AP_SSID, AP_PASSWORD);
-    
+
     if (status != WL_AP_LISTENING) {
-        Serial.println("Debug: First attempt failed, trying with channel 6...");
+        WLOGLN("Debug: First attempt failed, trying with channel 6...");
         status = WiFi.beginAP(AP_SSID, AP_PASSWORD, 6);
     }
-    
-    Serial.print("Debug: WiFi.beginAP() returned: ");
-    Serial.println(status);
-    
+
+    WLOG("Debug: WiFi.beginAP() returned: ");
+    WLOGLN(status);
+
+#if WIFI_VERBOSE
     // Print detailed status explanation
     Serial.print("Debug: Status meaning: ");
     switch(status) {
@@ -79,31 +77,29 @@ void WiFiManager::begin() {
         case WL_AP_FAILED: Serial.println("WL_AP_FAILED (9) - AP failed"); break;
         default: Serial.print("UNKNOWN STATUS ("); Serial.print(status); Serial.println(")"); break;
     }
-    
+#endif
+
     if (status != WL_AP_LISTENING) {
-        Serial.println("ERROR: Failed to create Access Point!");
-        Serial.println("Expected WL_AP_LISTENING (7), but got different status");
+        Serial.println("ERROR: Failed to create Access Point (expected WL_AP_LISTENING/7).");
         return;
     }
-    
-    Serial.println("Debug: Access Point creation initiated");
-    
+
     // Wait for AP to start and check status
-    Serial.println("Debug: Waiting for AP to start...");
     for (int i = 0; i < 10; i++) {
         delay(1000);
         status = WiFi.status();
-        Serial.print("Debug: WiFi status check ");
-        Serial.print(i + 1);
-        Serial.print("/10 - Status: ");
-        Serial.println(status);
-        
+        WLOG("Debug: WiFi status check ");
+        WLOG(i + 1);
+        WLOG("/10 - Status: ");
+        WLOGLN(status);
+
         if (status == WL_AP_LISTENING) {
-            Serial.println("Debug: AP is now listening!");
+            WLOGLN("Debug: AP is now listening!");
             break;
         }
     }
-    
+
+#if WIFI_VERBOSE
     // Print AP information and verify it's actually working
     IPAddress ip = WiFi.localIP();
     Serial.println("=== WiFi Access Point Information ===");
@@ -117,28 +113,22 @@ void WiFiManager::begin() {
     Serial.println(ip);
     Serial.print("Web Interface: http://");
     Serial.println(ip);
-    
-    // Additional diagnostic information
     Serial.print("WiFi Status: ");
     Serial.println(WiFi.status());
-    Serial.print("WiFi Mode: ");
-    // Note: WiFiNINA might not have explicit AP mode check
-    Serial.println("Access Point Mode");
-    
+    Serial.println("WiFi Mode: Access Point Mode");
+
     // Verify IP is valid
     if (ip == IPAddress(0, 0, 0, 0)) {
         Serial.println("WARNING: IP address is 0.0.0.0 - AP might not be working!");
     } else {
         Serial.println("IP address looks valid");
     }
-    
     Serial.println("=====================================");
-    
+#endif
+
     // Start the web server
-    Serial.println("Debug: Starting web server...");
     server.begin();
-    Serial.println("Debug: Web server started on port 80");
-    Serial.println("WiFi Manager initialization complete!");
+    WLOGLN("WiFi Manager initialization complete!");
 }
 
 void WiFiManager::handleClient() {

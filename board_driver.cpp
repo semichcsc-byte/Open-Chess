@@ -146,6 +146,32 @@ void BoardDriver::blinkSquare(int row, int col, int times) {
     }
 }
 
+void BoardDriver::breatheRow(int row, uint8_t r, uint8_t g, uint8_t b, uint8_t w) {
+    // Triangle-wave breathing (no math.h needed). ~1.8 s period, 9 discrete
+    // brightness steps. Only repaint when the step or the row changes, so we
+    // avoid hammering the LED strip (each show() briefly disables interrupts).
+    const unsigned long periodMs = 1800;
+    float phase = (millis() % periodMs) / (float)periodMs; // 0..1
+    float d = 2.0f * phase - 1.0f;                          // -1..1
+    if (d < 0) d = -d;                                      // 0..1
+    float tri = 1.0f - d;                                   // 0..1..0
+    int step = (int)(tri * 8.0f);                           // 0..8
+
+    static int lastStep = -1;
+    static int lastRow = -1;
+    if (step == lastStep && row == lastRow) return;
+    lastStep = step;
+    lastRow = row;
+
+    float k = 0.15f + (step / 8.0f) * 0.85f;                // 0.15..1.0
+    clearAllLEDs();
+    for (int c = 0; c < 8; c++) {
+        setSquareLED(row, c, (uint8_t)(r * k), (uint8_t)(g * k),
+                     (uint8_t)(b * k), (uint8_t)(w * k));
+    }
+    showLEDs();
+}
+
 void BoardDriver::fireworkAnimation() {
     float centerX = 3.5;
     float centerY = 3.5;

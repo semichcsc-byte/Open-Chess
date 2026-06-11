@@ -81,7 +81,10 @@ void ChessMoves::update() {
                 return;
             }
 
-            // Light up source + possible move squares
+            // Light up source + possible move squares. Clear first so the
+            // turn-indicator breathing (a lit back rank) doesn't bleed into
+            // the move display.
+            boardDriver->clearAllLEDs();
             boardDriver->setSquareLED(row, col, 0, 0, 0, 100); // Soft white source
             for (int i = 0; i < moveCount; i++) {
                 int r = moves[i][0];
@@ -264,6 +267,15 @@ void ChessMoves::update() {
             boardDriver->updateSensorPrev();
             return;
         }
+    }
+
+    // Idle (no piece lifted this scan): breathe the side-to-move's back rank
+    // so it's always obvious whose turn it is. White = rank 1 (row 0) in soft
+    // white; Black = rank 8 (row 7) in red.
+    if (turnColor == 'w') {
+        boardDriver->breatheRow(0, 0, 0, 0, 200); // white channel
+    } else {
+        boardDriver->breatheRow(7, 220, 0, 0, 0); // red
     }
 
     boardDriver->updateSensorPrev();

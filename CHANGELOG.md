@@ -4,6 +4,48 @@ All user-visible changes to the [`semichcsc-byte/Open-Chess`](https://github.com
 
 ---
 
+## [v1.3.0-rp2040] — 2026-06-11
+
+UX + AI-mode correctness release. Several issues only surface once you actually
+sit down and play a full game against the bot; this release fixes them and makes
+it much clearer whose turn it is.
+
+### Added
+
+- **Runtime difficulty selection.** After picking AI mode, 4 centre squares
+  light up as buttons — c4 Easy (green), d4 Medium (blue), e4 Hard (amber),
+  f4 Expert (red). No more recompiling to change strength.
+- **"Whose turn" indicator.** While it's your move, the side-to-move's back
+  rank gently breathes (white for you, red for the opponent in HvH), mirroring
+  the bot's existing blue "thinking" breathing. No more losing track of turns.
+- **Blue AI selector LED.** The Human-vs-AI menu square is now blue (Human-vs-
+  Human stays white) so the two options are distinguishable at a glance.
+
+### Fixed
+
+- **AI mode castling.** The player could not castle at all in AI mode (move
+  generation never offered it) and the bot's castles didn't move the rook.
+  AI mode now uses full legal-move generation, allows castling, moves the rook
+  internally, and shows a single blue rook-destination hint (+ blinking source).
+- **Invalid FEN after castling.** `boardToFEN()` hard-coded `KQkq`, producing an
+  illegal FEN once anyone had castled or moved a king/rook — Stockfish replied
+  `"Invalid FEN"` and the turn silently bounced back to the player. Castling
+  rights, en-passant target, and the halfmove clock are now derived from live
+  game state.
+- **Stockfish response parser** no longer grabs Cloudflare's `Report-To:` header
+  (whose value is JSON-shaped); it splits the HTTP body from the headers first.
+- **Mirrored rank notation** in AI-mode serial logs (`8 - row` → `row + 1`).
+- **Light bleed:** lifting a piece now clears the turn-indicator row before
+  drawing legal-move dots, so the king's row no longer shows a wall of LEDs.
+
+### Changed
+
+- **Clean serial output.** The `DEBUG: Loop running, uptime…` spam and the wall
+  of boot/WiFi diagnostics are gated behind `DEBUG_VERBOSE` / `WIFI_VERBOSE`
+  (both off by default). A short "How to play" legend prints at boot instead.
+
+---
+
 ## [v1.2.2-rp2040] — 2026-05-11
 
 Reliability release: **AI mode now actually works.** v1.2.0 / v1.2.1 had ~50-100% Stockfish failure rates in real-world conditions; v1.2.2 fixes that completely by routing through a tiny HTTP proxy.

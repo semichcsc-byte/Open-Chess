@@ -65,6 +65,12 @@ public:
     void promotionAnimation(int col);
     void blinkSquare(int row, int col, int times = 3);
     void highlightSquare(int row, int col, uint32_t color);
+
+    // Non-blocking "whose turn" indicator: gently breathes one full row
+    // (a player's back rank) in the given colour. Call it every loop while
+    // idle; it only repaints when the brightness step changes, so it is
+    // cheap and flicker-free. Pass the row to light (0 = rank 1, 7 = rank 8).
+    void breatheRow(int row, uint8_t r, uint8_t g, uint8_t b, uint8_t w = 0);
     
     // Setup Functions
     bool checkInitialBoard(const char initialBoard[8][8]);

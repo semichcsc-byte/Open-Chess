@@ -111,7 +111,14 @@ void ChessBot::update() {
         // Look for piece pickups and placements
         static int selectedRow = -1, selectedCol = -1;
         static bool piecePickedUp = false;
-        
+
+        // Breathe the player's back rank (rank 1) in soft white while it's
+        // your turn and no piece is lifted yet, so you always know it's on
+        // you to move (mirrors the bot's blue breathing on rank 8).
+        if (!piecePickedUp) {
+            _boardDriver->breatheRow(0, 0, 0, 0, 200); // white channel
+        }
+
         // Check for piece pickup
         if (!piecePickedUp) {
             for (int row = 0; row < 8; row++) {
@@ -131,20 +138,25 @@ void ChessBot::update() {
                             Serial.print(board[row][col]);
                             Serial.print("' at ");
                             Serial.print((char)('a' + col));
-                            Serial.print(8 - row);
+                            Serial.print(row + 1);
                             Serial.print(" (array position ");
                             Serial.print(row);
                             Serial.print(",");
                             Serial.print(col);
                             Serial.println(")");
                             
+                            // Clear the turn-indicator breathing on rank 1
+                            // first, otherwise its lit row bleeds into the
+                            // move display (looks like extra lights).
+                            _boardDriver->clearAllLEDs();
+
                             // Show selected square
                             _boardDriver->setSquareLED(row, col, 255, 0, 0); // Red
                             
-                            // Show possible moves
+                            // Show legal moves (includes castling + en-passant)
                             int moveCount = 0;
-                            int moves[27][2];
-                            _chessEngine->getPossibleMoves(board, row, col, moveCount, moves);
+                            int moves[MAX_MOVES_PER_PIECE][2];
+                            _chessEngine->getLegalMoves(board, &state, row, col, moveCount, moves);
                             
                             for (int i = 0; i < moveCount; i++) {
                                 _boardDriver->setSquareLED(moves[i][0], moves[i][1], 255, 255, 255); // White
@@ -157,7 +169,7 @@ void ChessBot::update() {
                                 Serial.print(piece);
                                 Serial.print("' at ");
                                 Serial.print((char)('a' + col));
-                                Serial.print(8 - row);
+                                Serial.print(row + 1);
                                 Serial.println(". You can only move WHITE pieces!");
                                 
                                 // Flash red to indicate error
@@ -190,8 +202,8 @@ void ChessBot::update() {
                         
                         // Piece placed somewhere else - validate move
                         int moveCount = 0;
-                        int moves[27][2];
-                        _chessEngine->getPossibleMoves(board, selectedRow, selectedCol, moveCount, moves);
+                        int moves[MAX_MOVES_PER_PIECE][2];
+                        _chessEngine->getLegalMoves(board, &state, selectedRow, selectedCol, moveCount, moves);
                         
                         bool validMove = false;
                         for (int i = 0; i < moveCount; i++) {
@@ -233,8 +245,8 @@ void ChessBot::update() {
                             
                             // Show possible moves again
                             int moveCount = 0;
-                            int moves[27][2];
-                            _chessEngine->getPossibleMoves(board, selectedRow, selectedCol, moveCount, moves);
+                            int moves[MAX_MOVES_PER_PIECE][2];
+                            _chessEngine->getLegalMoves(board, &state, selectedRow, selectedCol, moveCount, moves);
                             
                             for (int i = 0; i < moveCount; i++) {
                                 _boardDriver->setSquareLED(moves[i][0], moves[i][1], 255, 255, 255); // White
@@ -586,14 +598,27 @@ String ChessBot::makeStockfishRequest(String fen) {
 }
 
 bool ChessBot::parseStockfishResponse(String response, String &bestMove) {
-    // Find JSON content
-    int jsonStart = response.indexOf("{");
+    // Split HTTP headers from the body first. Cloudflare adds headers whose
+    // VALUES are themselves JSON (e.g. "Report-To: {...}", "Nel: {...}"), so
+    // a naive indexOf("{") on the whole response grabs the wrong object. The
+    // real payload starts after the blank line that ends the headers.
+    String body = response;
+    int headerEnd = response.indexOf("\r\n\r\n");
+    if (headerEnd != -1) {
+        body = response.substring(headerEnd + 4);
+    } else {
+        headerEnd = response.indexOf("\n\n");
+        if (headerEnd != -1) body = response.substring(headerEnd + 2);
+    }
+
+    // Find JSON content in the body.
+    int jsonStart = body.indexOf("{");
     if (jsonStart == -1) {
         Serial.println("No JSON found in response");
         return false;
     }
-    
-    String json = response.substring(jsonStart);
+
+    String json = body.substring(jsonStart);
     Serial.print("Extracted JSON: ");
     Serial.println(json);
     
@@ -795,16 +820,31 @@ String ChessBot::boardToFEN() {
     
     Serial.print("Current turn in FEN: ");
     Serial.println(isWhiteTurn ? "White (w)" : "Black (b)");
-    Serial.print("Bot should be playing as: Black");
-    
-    // Castling availability (simplified - assume all available initially)
-    fen += " KQkq";
-    
-    // En passant target square (simplified - assume none)
-    fen += " -";
-    
-    // Halfmove clock (simplified)
-    fen += " 0";
+
+    // Castling availability - derive from the live game state. A hard-coded
+    // "KQkq" produces an ILLEGAL FEN once anyone has castled or moved a
+    // king/rook (Stockfish then rejects it with "Invalid FEN"), which used
+    // to silently bounce the turn back to the player.
+    String castle = "";
+    if (state.whiteCanCastleKingside)  castle += "K";
+    if (state.whiteCanCastleQueenside) castle += "Q";
+    if (state.blackCanCastleKingside)  castle += "k";
+    if (state.blackCanCastleQueenside) castle += "q";
+    if (castle.length() == 0) castle = "-";
+    fen += " " + castle;
+
+    // En passant target square. Use the live state if a pawn just made a
+    // two-square advance; otherwise "-".
+    if (state.enPassantRow >= 0 && state.enPassantCol >= 0) {
+        fen += " ";
+        fen += (char)('a' + state.enPassantCol);
+        fen += (char)('1' + state.enPassantRow);
+    } else {
+        fen += " -";
+    }
+
+    // Halfmove clock (for the 50-move rule).
+    fen += " " + String(state.halfMoveClock);
     
     // Fullmove number (simplified)
     fen += " 1";
@@ -837,10 +877,10 @@ bool ChessBot::parseMove(String move, int &fromRow, int &fromCol, int &toRow, in
     Serial.println(")");
     Serial.print("In chess notation: ");
     Serial.print((char)('a' + fromCol));
-    Serial.print(8 - fromRow);
+    Serial.print(fromRow + 1);
     Serial.print(" to ");
     Serial.print((char)('a' + toCol));
-    Serial.print(8 - toRow);
+    Serial.print(toRow + 1);
     
     // Check for promotion
     if (move.length() >= 5) {
@@ -858,17 +898,22 @@ bool ChessBot::parseMove(String move, int &fromRow, int &fromCol, int &toRow, in
 void ChessBot::executeBotMove(int fromRow, int fromCol, int toRow, int toCol) {
     char piece = board[fromRow][fromCol];
     char capturedPiece = board[toRow][toCol];
-    
-    // Update board state
+
+    // Detect castling before mutating the board.
+    bool isCastle = (piece == 'K' || piece == 'k') &&
+                    (fromRow == toRow) && (fromCol == 4) &&
+                    (toCol == 6 || toCol == 2);
+
+    // Update board state (king)
     board[toRow][toCol] = piece;
     board[fromRow][fromCol] = ' ';
     
     Serial.print("Bot wants to move piece from ");
     Serial.print((char)('a' + fromCol));
-    Serial.print(8 - fromRow);
+    Serial.print(fromRow + 1);
     Serial.print(" to ");
     Serial.print((char)('a' + toCol));
-    Serial.println(8 - toRow);
+    Serial.println(toRow + 1);
     Serial.println("Please make this move on the physical board...");
     
     // Show the move that needs to be made
@@ -882,11 +927,73 @@ void ChessBot::executeBotMove(int fromRow, int fromCol, int toRow, int toCol) {
         Serial.println(capturedPiece);
         _boardDriver->captureAnimation();
     }
-    
-    // Flash confirmation on the destination square
+
+    // Confirm the king's destination, then (if castling) move the rook too:
+    // update it internally and show a blinking-blue source + solid-blue dest
+    // so the user knows exactly which rook to slide where.
     confirmSquareCompletion(toRow, toCol);
-    
+
+    if (isCastle) {
+        int rookFromCol = (toCol == 6) ? 7 : 0;
+        int rookToCol   = (toCol == 6) ? 5 : 3;
+        char rook = board[toRow][rookFromCol];
+        board[toRow][rookToCol] = rook;
+        board[toRow][rookFromCol] = ' ';
+
+        Serial.print("Bot castled: move the rook from ");
+        Serial.print((char)('a' + rookFromCol));
+        Serial.print(toRow + 1);
+        Serial.print(" to ");
+        Serial.print((char)('a' + rookToCol));
+        Serial.println(toRow + 1);
+
+        _boardDriver->readSensors();
+        unsigned long start = millis();
+        bool placed = false;
+        while (!placed && millis() - start < 30000) {
+            for (int f = 0; f < 2; f++) {
+                _boardDriver->clearAllLEDs();
+                _boardDriver->setSquareLED(toRow, rookToCol, 0, 0, 255);     // rook dest
+                if (f == 0) {
+                    _boardDriver->setSquareLED(toRow, rookFromCol, 0, 0, 255); // rook src blink
+                }
+                _boardDriver->showLEDs();
+                delay(300);
+                _boardDriver->readSensors();
+                if (_boardDriver->getSensorState(toRow, rookToCol)) {
+                    placed = true;
+                    break;
+                }
+            }
+        }
+        _boardDriver->clearAllLEDs();
+        _boardDriver->showLEDs();
+        _boardDriver->readSensors();
+        _boardDriver->updateSensorPrev();
+    }
+
+    // Keep castling rights current for the bot side too.
+    updateCastlingRights(piece, fromRow, fromCol);
+
     Serial.println("Bot move completed. Your turn!");
+}
+
+void ChessBot::updateCastlingRights(char piece, int fromRow, int fromCol) {
+    // A king move forfeits both of that side's castling rights; a rook move
+    // off its home square forfeits that side's right. This mirrors the rules
+    // ChessEngine::applyMove applies in Human-vs-Human mode.
+    if (piece == 'K') {
+        state.whiteCanCastleKingside = false;
+        state.whiteCanCastleQueenside = false;
+    } else if (piece == 'k') {
+        state.blackCanCastleKingside = false;
+        state.blackCanCastleQueenside = false;
+    } else if (piece == 'R' || piece == 'r') {
+        if (fromRow == 0 && fromCol == 0) state.whiteCanCastleQueenside = false;
+        if (fromRow == 0 && fromCol == 7) state.whiteCanCastleKingside = false;
+        if (fromRow == 7 && fromCol == 0) state.blackCanCastleQueenside = false;
+        if (fromRow == 7 && fromCol == 7) state.blackCanCastleKingside = false;
+    }
 }
 
 void ChessBot::showBotThinking() {
@@ -929,6 +1036,8 @@ void ChessBot::initializeBoard() {
             board[row][col] = INITIAL_BOARD[row][col];
         }
     }
+    // Fresh game: restore all castling rights / clear en-passant.
+    state.reset();
 }
 
 void ChessBot::waitForBoardSetup() {
@@ -951,26 +1060,80 @@ void ChessBot::waitForBoardSetup() {
 
 void ChessBot::processPlayerMove(int fromRow, int fromCol, int toRow, int toCol, char piece) {
     char capturedPiece = board[toRow][toCol];
-    
-    // Update board state
+
+    // Detect castling BEFORE mutating the board: the king moves two files
+    // along its own rank (e1->g1 / e1->c1, or e8->g8 / e8->c8).
+    bool isCastle = (piece == 'K' || piece == 'k') &&
+                    (fromRow == toRow) && (fromCol == 4) &&
+                    (toCol == 6 || toCol == 2);
+
+    // Update board state (king)
     board[toRow][toCol] = piece;
     board[fromRow][fromCol] = ' ';
-    
+
     Serial.print("Player moved ");
     Serial.print(piece);
     Serial.print(" from ");
     Serial.print((char)('a' + fromCol));
-    Serial.print(8 - fromRow);
+    Serial.print(fromRow + 1);
     Serial.print(" to ");
     Serial.print((char)('a' + toCol));
-    Serial.println(8 - toRow);
-    
+    Serial.println(toRow + 1);
+
     if (capturedPiece != ' ') {
         Serial.print("Captured ");
         Serial.println(capturedPiece);
         _boardDriver->captureAnimation();
     }
-    
+
+    // Castling: move the rook internally and tell the user exactly which
+    // rook to move where (a single blinking-blue source + solid-blue dest),
+    // instead of leaving them to guess and lighting the rook's normal moves.
+    if (isCastle) {
+        int rookFromCol = (toCol == 6) ? 7 : 0;
+        int rookToCol   = (toCol == 6) ? 5 : 3;
+        char rook = board[toRow][rookFromCol];
+        board[toRow][rookToCol] = rook;
+        board[toRow][rookFromCol] = ' ';
+
+        Serial.print("Castling: move the rook from ");
+        Serial.print((char)('a' + rookFromCol));
+        Serial.print(toRow + 1);
+        Serial.print(" to ");
+        Serial.print((char)('a' + rookToCol));
+        Serial.println(toRow + 1);
+
+        // Show the hint: king dest soft white, rook dest solid blue,
+        // rook source blinking blue. Hold until the user actually places
+        // the rook on its destination square.
+        _boardDriver->readSensors();
+        _boardDriver->updateSensorPrev();
+        unsigned long start = millis();
+        bool placed = false;
+        while (!placed && millis() - start < 30000) {
+            for (int f = 0; f < 2; f++) {
+                _boardDriver->clearAllLEDs();
+                _boardDriver->setSquareLED(toRow, toCol, 0, 0, 0, 100);     // king dest
+                _boardDriver->setSquareLED(toRow, rookToCol, 0, 0, 255);    // rook dest
+                if (f == 0) {
+                    _boardDriver->setSquareLED(toRow, rookFromCol, 0, 0, 255); // rook src blink
+                }
+                _boardDriver->showLEDs();
+                delay(300);
+                _boardDriver->readSensors();
+                // Done when the rook is sitting on its destination square.
+                if (_boardDriver->getSensorState(toRow, rookToCol)) {
+                    placed = true;
+                    break;
+                }
+            }
+        }
+        _boardDriver->clearAllLEDs();
+        _boardDriver->showLEDs();
+        _boardDriver->readSensors();
+        _boardDriver->updateSensorPrev();
+    }
+
     // Check for pawn promotion
     if (_chessEngine->isPawnPromotion(piece, toRow)) {
         char promotedPiece = _chessEngine->getPromotedPiece(piece);
@@ -979,6 +1142,10 @@ void ChessBot::processPlayerMove(int fromRow, int fromCol, int toRow, int toCol,
         Serial.println(promotedPiece);
         _boardDriver->promotionAnimation(toCol);
     }
+
+    // Keep castling rights current so getLegalMoves won't offer an illegal
+    // castle after the king or a rook has moved.
+    updateCastlingRights(piece, fromRow, fromCol);
 }
 
 String ChessBot::urlEncode(String str) {
@@ -1110,8 +1277,9 @@ void ChessBot::confirmSquareCompletion(int row, int col) {
 void ChessBot::printCurrentBoard() {
     Serial.println("=== CURRENT BOARD STATE ===");
     Serial.println("  a b c d e f g h");
-    for (int row = 0; row < 8; row++) {
-        Serial.print(8 - row);
+    // Print rank 8 (row 7) at the top down to rank 1 (row 0) - standard view.
+    for (int row = 7; row >= 0; row--) {
+        Serial.print(row + 1);
         Serial.print(" ");
         for (int col = 0; col < 8; col++) {
             char piece = board[row][col];
@@ -1123,7 +1291,7 @@ void ChessBot::printCurrentBoard() {
             }
         }
         Serial.print(" ");
-        Serial.println(8 - row);
+        Serial.println(row + 1);
     }
     Serial.println("  a b c d e f g h");
     Serial.println("White pieces (uppercase): R N B Q K P");
